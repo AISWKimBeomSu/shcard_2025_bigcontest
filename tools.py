@@ -225,6 +225,12 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
         재방문율 분석 및 개선 전략 리포트
     """
     try:
+        # 점수 컬럼 생성 (필요한 경우)
+        score_cols = ['MCT_OPE_MS_CN', 'RC_M1_TO_UE_CT', 'RC_M1_SAA', 'RC_M1_AV_NP_AT']
+        for col in score_cols:
+            if col in df_all_join.columns and f'{col}_SCORE' not in df_all_join.columns:
+                df_all_join[f'{col}_SCORE'] = df_all_join[col].apply(get_score_from_raw)
+        
         target_store_all_months = df_all_join[df_all_join['ENCODED_MCT'] == store_id]
         if target_store_all_months.empty:
             return f"🚨 분석 불가: 데이터셋에서 '{store_id}' 가맹점 정보를 찾을 수 없습니다."
@@ -764,6 +770,295 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         import traceback
         error_details = traceback.format_exc()
         return f"""🚨 전방위 분석 중 오류가 발생했습니다.
+
+**오류 상세 정보:**
+- 오류 유형: {type(e).__name__}
+- 오류 메시지: {str(e)}
+- 가맹점 ID: {store_id}
+
+**해결 방법:**
+1. 가맹점 ID가 올바른지 확인해주세요
+2. 데이터베이스에 해당 가맹점 정보가 있는지 확인해주세요
+3. 문제가 지속되면 관리자에게 문의해주세요
+
+**기술적 세부사항:**
+{error_details}"""
+# =============================================================================
+# 특화 질문 도구들
+# =============================================================================
+
+@tool
+def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_gender_age: pd.DataFrame, df_weekday_weekend: pd.DataFrame, df_dayofweek: pd.DataFrame, df_timeband: pd.DataFrame) -> str:
+    """
+    지하철역 인근 가맹점의 유동인구 데이터를 심층 분석하여, 신규 방문객을 단골로 전환하기 위한 '재방문 유도 전략'을 전문적으로 제안하는 도구.
+    '유동인구', '지하철역', '출퇴근', '재방문 유도' 관련 질문에 사용된다.
+    
+    Args:
+        store_id: 분석할 가맹점 ID
+        df_all_join: 전체 JOIN 데이터
+        df_gender_age: 성별연령대별 유동인구 데이터
+        df_weekday_weekend: 요일별 유동인구 데이터
+        df_dayofweek: 요일별 유동인구 데이터
+        df_timeband: 시간대별 유동인구 데이터
+    
+    Returns:
+        LLM에게 전달할 완성된 프롬프트 문자열
+    """
+    try:
+        # 데이터 정규화 유틸 함수들
+        def fmt(x, digits=1):
+            try:
+                return f"{float(x):,.{digits}f}"
+            except Exception:
+                return str(x)
+
+        def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+            df = df.copy()
+            def norm(s):
+                return str(s).replace("\u3000", "").replace(" ", "").strip()
+            df.columns = [norm(c) for c in df.columns]
+            rename_map = {}
+            for c in df.columns:
+                if c in ["지표","항목","분류","구분값","구분*","구분_", "구분"]:
+                    rename_map[c] = "구분"
+            if rename_map:
+                df = df.rename(columns=rename_map)
+            return df
+
+        def pick_population_row(df: pd.DataFrame) -> pd.Series:
+            df = normalize_columns(df)
+            if "구분" in df.columns:
+                cand = df[df["구분"].astype(str).str.contains("인구")]
+                if len(cand):
+                    return cand.iloc[0]
+            return df.iloc[0]
+
+        # DATA_BLOCK 생성 함수
+        def make_data_block(monthly, gender_age, weekday_weekend, dayofweek, timeband, shop_row) -> str:
+            lines = []
+            shop = shop_row.iloc[0].to_dict() if len(shop_row) else {}
+            shop_name = shop.get("MCT_NM", "가게명 미상")
+            shop_addr = shop.get("MCT_BSE_AR", "주소 미상")
+            shop_station = shop.get("HPSN_MCT_ZCD_NM", "지하철역 미상")
+            shop_cat = shop.get("업종_정규화1", shop.get("업종_정규화2_대분류", "업종 미상"))
+            shop_month = shop.get("TA_YM", "NA")
+
+            lines.append(f"## SHOP\n[가게] {shop_name} | 업종: {shop_cat}\n[주소] {shop_addr}\n[인근 지하철역] {shop_station}\n[기준월] {shop_month}")
+
+            # 성/연령
+            gender_age = normalize_columns(gender_age)
+            ga_row = gender_age.iloc[0]
+            ga_total = ga_row.get("일일")
+            ga_male = ga_row.get("남성")
+            ga_female = ga_row.get("여성")
+            ga_lines = []
+            if ga_total is not None:
+                ga_lines.append(f"일 평균 유동인구 {fmt(ga_total,0)}명")
+            if ga_male is not None and ga_female is not None:
+                ga_lines.append(f"남 {fmt(ga_male,0)}명 / 여 {fmt(ga_female,0)}명")
+            lines.append("\n## GENDER_AGE\n" + (" / ".join(ga_lines) if ga_lines else "정보 없음"))
+
+            # 요일
+            dayofweek = normalize_columns(dayofweek)
+            try:
+                row = pick_population_row(dayofweek)
+                dow_cols = [c for c in row.index if any(x in c for x in ["월","화","수","목","금","토","일"])]
+                s = row[dow_cols].astype(float).sort_values(ascending=False)[:2]
+                lines.append("\n## DAYOFWEEK\n상위 요일 TOP2 → " + " / ".join([f"{k}: {fmt(v,0)}명" for k,v in s.items()]))
+            except Exception:
+                lines.append("\n## DAYOFWEEK\n정보 없음")
+
+            # 평일/주말
+            weekday_weekend = normalize_columns(weekday_weekend)
+            try:
+                row = pick_population_row(weekday_weekend)
+                wk_key = "주중" if "주중" in weekday_weekend.columns else ("평일" if "평일" in weekday_weekend.columns else None)
+                we_key = "주말" if "주말" in weekday_weekend.columns else None
+                if wk_key and we_key:
+                    lines.append(f"\n## WEEKDAY_WEEKEND\n평일: {fmt(row[wk_key],0)}명/일 / 주말: {fmt(row[we_key],0)}명/일")
+                else:
+                    lines.append("\n## WEEKDAY_WEEKEND\n정보 없음")
+            except Exception:
+                lines.append("\n## WEEKDAY_WEEKEND\n정보 없음")
+
+            # 시간대
+            timeband = normalize_columns(timeband)
+            try:
+                row = pick_population_row(timeband)
+                tb_cols = [c for c in row.index if ("시" in c or "~" in c)]
+                s = row[tb_cols].astype(float).sort_values(ascending=False)[:3]
+                lines.append("\n## TIMEBAND\n시간대 TOP3 → " + " / ".join([f"{k}: {fmt(v,0)}명" for k,v in s.items()]))
+            except Exception:
+                lines.append("\n## TIMEBAND\n정보 없음")
+
+            return "\n".join(lines)
+
+        # 가맹점 정보 조회
+        shop_row = df_all_join[df_all_join["ENCODED_MCT"] == store_id]
+        if shop_row.empty:
+            return f"🚨 분석 불가: '{store_id}' 가맹점의 데이터를 찾을 수 없습니다."
+
+        # 프롬프트 구성
+        SYSTEM_PROMPT = """
+너는 동네 상권 마케팅 전략가다.
+답변은 다음 우선순위를 반드시 지켜라:
+1) 우리 가게는 지하철역(출퇴근 인구 중심) 근처임을 전제로, 시간대별(특히 출퇴근) 유동인구 특징을 가장 먼저 요약
+2) 유동인구 의존도가 높아 신규 방문은 많지만 재방문율이 낮다는 가정 하에, 재방문 고객 유도 전략을 중심으로 제시
+""".strip()
+
+        QUESTION = (
+            "우리 가게는 지하철역 근처에 있다.\n"
+            "답변은 첫번째로 우리 가게 주변 유동인구 특성을 정리하고, 특히 지하철역 특성상 출퇴근 시간대의 유동인구 변화를 먼저 설명해줘.\n"
+            "그 다음, 유동인구 의존도가 높아서 신규 방문은 많지만 재방문율이 낮은 편이다.\n"
+            "이를 개선하기 위해 재방문 고객 유도 전략만 집중해서 제시해줘."
+        )
+
+        def build_prompt(question: str, data_block: str) -> str:
+            return f"SYSTEM:\n{SYSTEM_PROMPT}\n\n[질문]\n{question}\n\n[DATA_BLOCK]\n{data_block}"
+
+        # 데이터 블록 생성
+        monthly = pd.DataFrame()  # 사용 안함
+        data_block = make_data_block(monthly, df_gender_age, df_weekday_weekend, df_dayofweek, df_timeband, shop_row)
+        prompt = build_prompt(QUESTION, data_block)
+        
+        # 최종 프롬프트 반환 (API 호출 제거)
+        return prompt
+
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        return f"""🚨 유동인구 전략 분석 중 오류가 발생했습니다.
+
+**오류 상세 정보:**
+- 오류 유형: {type(e).__name__}
+- 오류 메시지: {str(e)}
+- 가맹점 ID: {store_id}
+
+**해결 방법:**
+1. 가맹점 ID가 올바른지 확인해주세요
+2. 데이터베이스에 해당 가맹점 정보가 있는지 확인해주세요
+3. 문제가 지속되면 관리자에게 문의해주세요
+
+**기술적 세부사항:**
+{error_details}"""
+
+
+@tool
+def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_gender_age: pd.DataFrame, df_weekday_weekend: pd.DataFrame, df_dayofweek: pd.DataFrame, df_timeband: pd.DataFrame) -> str:
+    """
+    직장인 상권에 위치한 가맹점의 데이터를 분석하여, 점심 피크타임의 '회전율'을 극대화하기 위한 구체적인 운영 전략을 제안하는 도구.
+    '직장인', '점심시간', '회전율', '효율' 관련 질문에 사용된다.
+    
+    Args:
+        store_id: 분석할 가맹점 ID
+        df_all_join: 전체 JOIN 데이터
+        df_gender_age: 성별연령대별 유동인구 데이터
+        df_weekday_weekend: 요일별 유동인구 데이터
+        df_dayofweek: 요일별 유동인구 데이터
+        df_timeband: 시간대별 유동인구 데이터
+    
+    Returns:
+        LLM에게 전달할 완성된 프롬프트 문자열
+    """
+    try:
+        # 데이터 도우미 함수
+        def fmt(x, digits=1):
+            try:
+                return f"{float(x):,.{digits}f}"
+            except Exception:
+                return str(x)
+
+        # DATA_BLOCK 생성 함수
+        def make_data_block(monthly, gender_age, weekday_weekend, dayofweek, timeband, shop_row) -> str:
+            lines = []
+            shop = shop_row.iloc[0].to_dict() if len(shop_row) else {}
+            shop_name = shop.get("MCT_NM", "가게명 미상")
+            shop_addr = shop.get("MCT_BSE_AR", "주소 미상")
+            shop_station = shop.get("HPSN_MCT_ZCD_NM", "지하철역 미상")
+            shop_cat = shop.get("업종_정규화1", shop.get("업종_정규화2_대분류", "업종 미상"))
+            shop_month = shop.get("TA_YM", "NA")
+
+            meta = [
+                f"[가게] {shop_name} | 업종: {shop_cat}",
+                f"[주소] {shop_addr}",
+                f"[인근 지하철역] {shop_station}",
+                f"[기준월] {shop_month}",
+            ]
+            lines.append("## SHOP\n" + "\n".join(meta))
+
+            # 성/연령
+            ga_row = gender_age.iloc[0]
+            ga_total = ga_row.get("일일")
+            ga_male = ga_row.get("남성")
+            ga_female = ga_row.get("여성")
+            ga_lines = []
+            if ga_total is not None:
+                ga_lines.append(f"일 평균 유동인구 {fmt(ga_total,0)}명")
+            if ga_male is not None and ga_female is not None:
+                ga_lines.append(f"남 {fmt(ga_male,0)}명 / 여 {fmt(ga_female,0)}명")
+            lines.append("\n## GENDER_AGE\n" + (" / ".join(ga_lines) if ga_lines else "정보 없음"))
+
+            # 요일
+            if "월" in dayofweek.columns:
+                pop_row = dayofweek[dayofweek["구분"] == "인구"].iloc[0]
+                top2 = pop_row[["월", "화", "수", "목", "금", "토", "일"]].sort_values(ascending=False)[:2]
+                top_lines = [f"{idx}: {fmt(val,0)}명" for idx, val in top2.items()]
+                lines.append("\n## DAYOFWEEK\n상위 요일 TOP2 → " + " / ".join(top_lines))
+            else:
+                lines.append("\n## DAYOFWEEK\n정보 없음")
+
+            # 평/주말
+            if "주중" in weekday_weekend.columns:
+                row = weekday_weekend[weekday_weekend["구분"] == "인구"].iloc[0]
+                wk = f"평일: {fmt(row['주중'], 0)}명/일"
+                we = f"주말: {fmt(row['주말'], 0)}명/일"
+                lines.append("\n## WEEKDAY_WEEKEND\n" + wk + " / " + we)
+            else:
+                lines.append("\n## WEEKDAY_WEEKEND\n정보 없음")
+
+            # 시간대
+            row = timeband[timeband["구분"] == "인구"].iloc[0]
+            top3 = row[["05~09시", "09~12시", "12~14시", "14~18시", "18~23시", "23~05시"]].sort_values(ascending=False)[:3]
+            time_lines = [f"{idx}: {fmt(val,0)}명" for idx, val in top3.items()]
+            lines.append("\n## TIMEBAND\n시간대 TOP3 → " + " / ".join(time_lines))
+
+            return "\n".join(lines)
+
+        # 가맹점 정보 조회
+        shop_row = df_all_join[df_all_join["ENCODED_MCT"] == store_id]
+        if shop_row.empty:
+            return f"🚨 분석 불가: '{store_id}' 가맹점의 데이터를 찾을 수 없습니다."
+
+        # 프롬프트 구성
+        SYSTEM_PROMPT = """
+너는 동네 상권 마케팅 전략가다.
+반드시 제공된 DATA_BLOCK만 근거로 실행 가능한 전략을 제시한다.
+답변은 다음 우선순위를 반드시 지켜라:
+1) 근처 직장인구에 대한 분석, 주말과 평일 직장인구 비교 등 여러 분석 후 한 문장으로 요약해줘
+2) 직장인 방문 비율이 높은 업종 특성상 회전률이 핵심 KPI임을 반영하여, 점심시간 회전율을 높이기 위한 전략을 제시할 것
+""".strip()
+
+        QUESTION = (
+            "우리 가게는 직장인 고객이 주요 타겟이며, 점심시간에 해당하는 유동인구와 직장인구의 분석을 상세히 설명해줘.\n"
+            "1) 점심시간 직장인구 특성을 요약해줘\n"
+            "2) 점심 피크타임에 회전율을 높이기 위한 전략을 제시해줘"
+        )
+
+        def build_prompt(question: str, data_block: str) -> str:
+            return f"SYSTEM:\n{SYSTEM_PROMPT}\n\n[질문]\n{question}\n\n[DATA_BLOCK]\n{data_block}"
+
+        # 데이터 블록 생성
+        monthly = pd.DataFrame()  # 사용 안함
+        data_block = make_data_block(monthly, df_gender_age, df_weekday_weekend, df_dayofweek, df_timeband, shop_row)
+        prompt = build_prompt(QUESTION, data_block)
+        
+        # 최종 프롬프트 반환 (API 호출 제거)
+        return prompt
+
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        return f"""🚨 점심시간 회전율 전략 분석 중 오류가 발생했습니다.
 
 **오류 상세 정보:**
 - 오류 유형: {type(e).__name__}
