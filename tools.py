@@ -152,7 +152,7 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 
 # DATA INPUT (너가 분석할 핵심 데이터)
 1. **[WHO] 우리 가게 핵심 고객 페르소나 (가장 중요한 기준점):**
-{main_personas_details_list}
+{main_personas_details_str}
 
 2. **[WHAT] 우리 가게의 시장 성공 전략 (고객을 공략할 우리만의 무기):**
 - '{core_strategy}'
@@ -398,13 +398,13 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
       🩺 AI 재방문율 진단 - '{store_id}' 가맹점 분석 리포트
 ======================================================================
 
-### 📊 현재 상황 진단
+### 1단계: 현재 상황 진단 (**필수 출력**)
 
 * **업종/상권:** {industry} / {area_name}
 * **현재 재방문율:** {target_revisit_rate:.1f}% (월 평균)
 * **AI 진단 페르소나:** {persona}
 
-### 🔍 3대 핵심 동인 분석
+### 2단계: 3대 핵심 동인 분석 (**필수 출력**)
 
 **① 가격 경쟁력 (객단가)**
 - 내 가게: {target_price_score_avg:.2f}점
@@ -421,22 +421,22 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
 - 성공 그룹 평균: {peer_delivery_avg:.1f}%
 - 격차: {analysis_results['channel_expansion']['gap']:.1f}%p
 
-### 🚀 개선 전략 제안
+### 3단계: 개선 전략 제안 (**필수 출력**)
 
 **핵심 성공 변수:** {key_factor}
 **핵심 경영 전략:** {key_strategy}
 
-**A/B 전략 옵션:**
+**A/B 전략 옵션:** (**필수 출력**)
 
-**전략 A (강점 강화/차별화):**
+**전략 A (강점 강화/차별화):** (**필수 출력**)
 - 현재 잘하고 있는 부분을 더욱 강화
 - 시장의 규칙을 따르는 대신 새로운 규칙을 만드는 전략
 
-**전략 B (약점 보완/동기화):**
+**전략 B (약점 보완/동기화):** (**필수 출력**)
 - 성공 그룹의 전략을 벤치마킹
 - 안정적인 성공 방정식을 따르는 전략
 
-### 💡 즉시 실행 가능한 액션 플랜
+### 💡 즉시 실행 가능한 액션 플랜 (**필수 출력**)
 
 1. **단기 긴급 처방 (1-2주)**
    - {persona} 문제 해결을 위한 즉시 실행 가능한 솔루션

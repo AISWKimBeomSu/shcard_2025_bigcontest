@@ -84,13 +84,10 @@ def load_data():
         # 필수 컬럼이 있는 행만 유지
         df_all_join.dropna(subset=['ENCODED_MCT', '업종_정규화2_대분류'], inplace=True)
         
-        # 2. 카페 가맹점별 주요고객 데이터 로드
-        df_cafe_customers = pd.read_csv(data_path / "카페_가맹점별_주요고객.csv", encoding='utf-8-sig')
-        
-        # 3. AI상담사 핵심전략 프롬프트 데이터 로드
+        # 2. AI상담사 핵심전략 프롬프트 데이터 로드
         df_prompt_dna = pd.read_csv(data_path / "AI상담사_핵심전략_프롬프트.csv", encoding='utf-8-sig')
         
-        # 4. 특화 질문용 유동인구 데이터 로드 (7개 파일)
+        # 3. 특화 질문용 유동인구 데이터 로드 (7개 파일)
         df_gender_age = pd.read_csv(data_path / "성별연령대별_유동인구.csv", encoding='utf-8-sig')
         df_gender_age_selected = pd.read_csv(data_path / "성별연령대별_유동인구_선택영역.csv", encoding='utf-8-sig')
         df_weekday_weekend = pd.read_csv(data_path / "요일별_유동인구.csv", encoding='utf-8-sig')
@@ -100,11 +97,11 @@ def load_data():
         df_timeband_selected = pd.read_csv(data_path / "시간대별_유동인구_선택영역.csv", encoding='utf-8-sig')
         df_workplace_population = pd.read_csv(data_path / "성별연령대별_직장인구.csv", encoding='utf-8-sig')
         
-        return df_all_join, df_cafe_customers, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population
+        return df_all_join, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population
         
     except Exception as e:
         st.error(f"데이터 로딩 중 오류가 발생했습니다: {e}")
-        return None, None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None
 
 
 # Streamlit App UI
@@ -150,9 +147,8 @@ with main_container:
 # LLM 모델은 데이터 로드 후 초기화
 
 class ToolExecutor:
-    def __init__(self, df_all, df_cafe, df_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population):
+    def __init__(self, df_all, df_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population):
         self.df_all_join = df_all
-        self.df_cafe_customers = df_cafe
         self.df_prompt_dna = df_dna
         self.df_gender_age = df_gender_age
         self.df_gender_age_selected = df_gender_age_selected
@@ -175,7 +171,6 @@ class ToolExecutor:
         try:
             return cafe_marketing_tool.invoke({
                 "store_id": store_id, 
-                "df_cafe_customers": self.df_cafe_customers, 
                 "df_all_join": self.df_all_join, 
                 "df_prompt_dna": self.df_prompt_dna
             })
@@ -275,7 +270,7 @@ class ToolExecutor:
 
 
 # 데이터 로드
-df_all_join, df_cafe_customers, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population = load_data()
+df_all_join, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population = load_data()
 
 if df_all_join is not None:
     if "messages" not in st.session_state:
@@ -294,7 +289,7 @@ if df_all_join is not None:
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", google_api_key=GOOGLE_API_KEY, temperature=0.2)
     
-    tool_executor = ToolExecutor(df_all_join, df_cafe_customers, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population)
+    tool_executor = ToolExecutor(df_all_join, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population)
     agent = create_react_agent(llm, tool_executor.get_all_tools())
 
     if query := st.chat_input("질문과 함께 가게 ID를 입력하세요. (예: 재방문율 분석해줘 (가게 ID: ABC12345))"):
