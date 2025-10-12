@@ -11,7 +11,7 @@ from PIL import Image
 from pathlib import Path
 
 # 새로 만든 분석 도구들 import
-from tools import cafe_marketing_tool, revisit_rate_analysis_tool, store_strength_weakness_tool, search_merchant_tool, floating_population_strategy_tool, lunch_turnover_strategy_tool, get_score_from_raw
+from tools import cafe_marketing_tool, revisit_rate_analysis_tool, store_strength_weakness_tool, floating_population_strategy_tool, lunch_turnover_strategy_tool, get_score_from_raw
 
 # 환경변수
 ASSETS = Path("assets")
@@ -44,10 +44,6 @@ system_prompt = """당신은 사용자의 요청을 분석하여 최적의 솔�
 **5순위: 전방위 진단**
 - 질문에 **'가장 큰 문제점', '종합적인 진단', '강점과 약점', '문제점'** 키워드가 있으면
   -> `store_strength_weakness_tool` 사용
-
-**6순위: 기본 정보**
-- 위 경우에 해당하지 않고, 단순히 **가게의 '기본 정보'**만 요청하면
-  -> `search_merchant_tool` 사용
 
 **[행동 순서]**
 1. 사용자 질문에서 가게 ID를 찾습니다. (예: '(가게 ID: ABC12345)')
@@ -158,12 +154,6 @@ class ToolExecutor:
         self.df_timeband_selected = df_timeband_selected
         self.df_workplace_population = df_workplace_population
 
-    def search_merchant_tool(self, store_id: str) -> str:
-        """가게의 기본 정보만 간단히 조회할 때 사용합니다."""
-        try:
-            return search_merchant_tool.invoke({"merchant_name": store_id, "df_all_join": self.df_all_join})
-        except Exception as e:
-            return f"🚨 가맹점 검색 중 오류가 발생했습니다: {str(e)}"
 
     def cafe_marketing_tool(self, store_id: str) -> str:
         """'카페' 가맹점의 고객 특성 분석 및 마케팅/홍보 전략을 제안할 때 사용합니다."""
@@ -229,11 +219,6 @@ class ToolExecutor:
         from langchain_core.tools import tool
         
         @tool
-        def search_merchant_wrapper(store_id: str) -> str:
-            """가게의 기본 정보만 간단히 조회할 때 사용합니다."""
-            return self.search_merchant_tool(store_id)
-        
-        @tool
         def cafe_marketing_wrapper(store_id: str) -> str:
             """'카페' 가맹점의 고객 특성 분석 및 마케팅/홍보 전략을 제안할 때 사용합니다."""
             return self.cafe_marketing_tool(store_id)
@@ -259,7 +244,6 @@ class ToolExecutor:
             return self.lunch_turnover_strategy_tool(store_id)
         
         return [
-            search_merchant_wrapper,
             cafe_marketing_wrapper,
             revisit_rate_analysis_wrapper,
             store_strength_weakness_wrapper,

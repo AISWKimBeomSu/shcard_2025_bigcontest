@@ -55,6 +55,71 @@ def score_to_level_text(score):
         return "하위 10-25% 수준"
     return "하위 10% 수준"
 
+def _get_store_basic_info(store_id: str, df_all_join: pd.DataFrame) -> tuple[str, pd.Series | None]:
+    """
+    가맹점 ID로 기본 정보를 조회하고, 포맷팅된 리포트와 데이터 Series를 반환하는 내부 헬퍼 함수.
+    가맹점을 찾지 못하면 오류 메시지와 None을 반환한다.
+    """
+    store_data = df_all_join[df_all_join['ENCODED_MCT'] == store_id]
+    
+    if store_data.empty:
+        error_report = f"""
+======================================================================
+      🚨 분석 시작 불가 - 가맹점 정보 없음
+======================================================================
+
+'({store_id})'에 해당하는 가맹점 정보를 찾을 수 없습니다.
+가게 ID를 다시 확인해주세요.
+
+"""
+        return error_report, None
+
+    latest_result = store_data.sort_values(by='TA_YM', ascending=False).iloc[0]
+    
+    # 기본 정보 추출
+    store_name = latest_result.get('가맹점명', '정보 없음')
+    industry = latest_result.get('업종_정규화2_대분류', '정보 없음')
+    commercial_area = latest_result.get('HPSN_MCT_BZN_CD_NM', '비상권')
+    operation_period = latest_result.get('MCT_OPE_MS_CN', '정보 없음')
+    latest_month = latest_result.get('TA_YM', '정보 없음')
+    
+    # 매출 관련 정보
+    revenue_level = latest_result.get('RC_M1_SAA', '정보 없음')
+    customer_count_level = latest_result.get('RC_M1_UE_CUS_CN', '정보 없음')
+    avg_amount_level = latest_result.get('RC_M1_AV_NP_AT', '정보 없음')
+    
+    # 고객 비율 정보
+    new_customer_ratio = latest_result.get('MCT_UE_CLN_NEW_RAT', 0)
+    revisit_ratio = latest_result.get('MCT_UE_CLN_REU_RAT', 0)
+    resident_ratio = latest_result.get('RC_M1_SHC_RSD_UE_CLN_RAT', 0)
+    delivery_ratio = latest_result.get('DLV_SAA_RAT', 0)
+    
+    # 기본 정보 리포트 생성
+    basic_info_report = f"""
+======================================================================
+      🏪 가맹점 기본 정보 ({store_id})
+======================================================================
+
+### 📋 기본 정보
+- **가맹점명:** {store_name}
+- **업종:** {industry}
+- **상권:** {commercial_area if pd.notna(commercial_area) else '비상권'}
+- **운영 기간:** {operation_period}
+- **최신 데이터:** {latest_month}
+
+### 💰 매출 현황 (최신월 기준)
+- **매출 수준:** {revenue_level}
+- **방문 고객 수:** {customer_count_level}
+- **객단가 수준:** {avg_amount_level}
+
+### 👥 고객 분석 (최신월 기준)
+- **신규 고객 비율:** {new_customer_ratio:.1f}%
+- **재방문 고객 비율:** {revisit_ratio:.1f}%
+- **거주 고객 비율:** {resident_ratio:.1f}%
+- **배달 매출 비율:** {delivery_ratio:.1f}%
+"""
+    return basic_info_report, latest_result
+
 # =============================================================================
 # 모델 1: 카페 업종 주요 고객 분석 및 마케팅 채널/홍보안 추천
 # =============================================================================
@@ -89,15 +154,23 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
         분석 결과 및 마케팅 전략 제안 리포트
     """
     try:
+        # 1. 공통 헬퍼 함수 호출
+        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        
+        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
+        if latest_store_data is None:
+            return basic_info_report
+
+        # 3. 카페 업종 확인
+        if latest_store_data['업종_정규화2_대분류'] != '카페':
+            return basic_info_report + f"\n🚨 분석 실패: '{store_id}' 가맹점은 '카페' 업종이 아닙니다."
+
         # 1단계: 데이터 분석 엔진
         # [수정] 동적 고객 분석 로직
         persona_columns = list(PERSONA_MAP.keys())
 
         # 전체 데이터에서 해당 가맹점 & '카페' 업종 데이터 필터링
         store_df = df_all_join[(df_all_join['ENCODED_MCT'] == store_id) & (df_all_join['업종_정규화2_대분류'] == '카페')].copy()
-
-        if store_df.empty:
-            return f"분석 실패: '{store_id}' 가맹점은 '카페' 업종이 아니거나, 데이터를 찾을 수 없습니다."
 
         # 해당 가맹점의 기간별 고객 비중 데이터에서 평균 계산
         analysis_df = store_df[persona_columns]
@@ -230,7 +303,7 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 
         final_report = f"""
 ======================================================================
-🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
+      🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
 ======================================================================
 
 1. 우리 가게 주요 고객 특징 분석 (페르소나 기반)
@@ -246,7 +319,7 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 (AI가 아래 프롬프트를 바탕으로 답변을 생성합니다.)
 {prompt_for_gemini}
 """
-        return final_report
+        return basic_info_report + final_report
 
     except Exception as e:
         import traceback
@@ -285,6 +358,13 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
         재방문율 분석 및 개선 전략 리포트
     """
     try:
+        # 1. 공통 헬퍼 함수 호출
+        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        
+        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
+        if latest_store_data is None:
+            return basic_info_report
+
         # 점수 컬럼 생성 (필요한 경우)
         score_cols = ['MCT_OPE_MS_CN', 'RC_M1_TO_UE_CT', 'RC_M1_SAA', 'RC_M1_AV_NP_AT']
         for col in score_cols:
@@ -292,10 +372,7 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
                 df_all_join[f'{col}_SCORE'] = df_all_join[col].apply(get_score_from_raw)
         
         target_store_all_months = df_all_join[df_all_join['ENCODED_MCT'] == store_id]
-        if target_store_all_months.empty:
-            return f"🚨 분석 불가: 데이터셋에서 '{store_id}' 가맹점 정보를 찾을 수 없습니다."
-
-        target_store = target_store_all_months.sort_values(by='TA_YM', ascending=False).iloc[0]
+        target_store = latest_store_data
 
         # 재방문율 계산 (월별 평균)
         target_revisit_rate_series = target_store_all_months['MCT_UE_CLN_REU_RAT'].dropna()
@@ -713,7 +790,7 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
 
 ======================================================================
 """
-        return final_report
+        return basic_info_report + final_report
 
     except Exception as e:
         import traceback
@@ -787,117 +864,6 @@ def calculate_advanced_match_score(area_top2_names, store_top2_names):
     
     return max(0, min(100, base_score + bonus_score))
 
-@tool # 여기 수정해야함(가맹점 명 형식 오류)
-def search_merchant_tool(merchant_name: str, df_all_join: pd.DataFrame) -> str:
-    """
-    가맹점 이름을 입력받아, 해당 가맹점의 기본 정보(업종, 주소, 개설일 등)를 
-    데이터베이스에서 검색하는 도구.
-    사용자가 가게의 기본 정보만 요청할 때 사용된다.
-    
-    Args:
-        merchant_name: 검색할 가맹점명 (부분 일치 지원)
-        df_all_join: 전체 JOIN 데이터
-    
-    Returns:
-        가맹점 검색 결과 리포트
-    """
-    try:
-        # 가맹점명으로 검색 (exact match)
-        result = df_all_join[df_all_join['가맹점명'].astype(str).str.replace('*', '') == merchant_name.replace('*', '')]
-        
-        if len(result) == 0:
-            return f"""
-🚨 검색 결과 없음
-
-'{merchant_name}'에 해당하는 가맹점을 찾을 수 없습니다.
-
-💡 검색 팁:
-- 정확한 가맹점명을 입력해주세요
-- '*' 기호는 자동으로 제거됩니다
-- 대소문자는 구분하지 않습니다
-
-조회 가능한 예시: 동대*, 유유*, 똥파*, 본죽*, 본*, 원조*, 희망*, 혁이*, H커*, 케키*
-"""
-        
-        # 최신 데이터 선택 (TA_YM 기준)
-        latest_result = result.sort_values(by='TA_YM', ascending=False).iloc[0]
-        
-        # 기본 정보 추출
-        store_name = latest_result.get('가맹점명', '정보 없음')
-        industry = latest_result.get('업종_정규화2_대분류', '정보 없음')
-        address = latest_result.get('HPSN_MCT_BZN_CD_NM', '정보 없음')
-        commercial_area = latest_result.get('HPSN_MCT_BZN_CD_NM', '비상권')
-        
-        # 매출 관련 정보
-        revenue_level = latest_result.get('RC_M1_SAA', '정보 없음')
-        customer_count_level = latest_result.get('RC_M1_UE_CUS_CN', '정보 없음')
-        avg_amount_level = latest_result.get('RC_M1_AV_NP_AT', '정보 없음')
-        
-        # 고객 비율 정보
-        new_customer_ratio = latest_result.get('MCT_UE_CLN_NEW_RAT', 0)
-        revisit_ratio = latest_result.get('MCT_UE_CLN_REU_RAT', 0)
-        resident_ratio = latest_result.get('RC_M1_SHC_RSD_UE_CLN_RAT', 0)
-        delivery_ratio = latest_result.get('DLV_SAA_RAT', 0)
-        
-        # 운영 기간
-        operation_period = latest_result.get('MCT_OPE_MS_CN', '정보 없음')
-        
-        # 최신 월
-        latest_month = latest_result.get('TA_YM', '정보 없음')
-        
-        # 검색 결과 리포트 생성
-        report = f"""
-======================================================================
-      🏪 가맹점 기본 정보 - '{store_name}' 검색 결과
-======================================================================
-
-### 📋 기본 정보
-- **가맹점명:** {store_name}
-- **업종:** {industry}
-- **상권:** {commercial_area if pd.notna(commercial_area) else '비상권'}
-- **운영 기간:** {operation_period}
-- **최신 데이터:** {latest_month}
-
-### 💰 매출 현황 (최신월 기준)
-- **매출 수준:** {revenue_level}
-- **방문 고객 수:** {customer_count_level}
-- **객단가 수준:** {avg_amount_level}
-
-### 👥 고객 분석 (최신월 기준)
-- **신규 고객 비율:** {new_customer_ratio:.1f}%
-- **재방문 고객 비율:** {revisit_ratio:.1f}%
-- **거주 고객 비율:** {resident_ratio:.1f}%
-- **배달 매출 비율:** {delivery_ratio:.1f}%
-
-### 🔍 추가 분석 가능
-이 가맹점에 대해 더 자세한 분석을 원하시면 다음을 요청해주세요:
-- **마케팅 전략 분석** (카페 업종인 경우)
-- **재방문율 개선 방안** (재방문율이 낮은 경우)
-- **전체적인 강점/약점 진단**
-
-======================================================================
-"""
-        
-        return report
-        
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        return f"""🚨 가맹점 검색 중 오류가 발생했습니다.
-
-**오류 상세 정보:**
-- 오류 유형: {type(e).__name__}
-- 오류 메시지: {str(e)}
-- 검색어: {merchant_name}
-
-**해결 방법:**
-1. 가맹점명이 올바른지 확인해주세요
-2. 데이터베이스에 해당 가맹점 정보가 있는지 확인해주세요
-3. 문제가 지속되면 관리자에게 문의해주세요
-
-**기술적 세부사항:**
-{error_details}"""
-
 @tool
 def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> str:
     """
@@ -914,11 +880,15 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         강점/약점 분석 및 개선 솔루션 리포트
     """
     try:
+        # 1. 공통 헬퍼 함수 호출
+        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        
+        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
+        if latest_store_data is None:
+            return basic_info_report
+
         store_df = df_all_join[df_all_join['ENCODED_MCT'] == store_id].tail(12)
-        if store_df.empty:
-            return f"🚨 분석 불가: '{store_id}' 가맹점의 데이터를 찾을 수 없습니다."
-            
-        category, commercial_area = store_df[['업종_정규화2_대분류', 'HPSN_MCT_BZN_CD_NM']].iloc[0]
+        category, commercial_area = latest_store_data['업종_정규화2_대분류'], latest_store_data['HPSN_MCT_BZN_CD_NM']
         
         if pd.notna(commercial_area):
             benchmark_type = "동일 상권 내 동종업계"
@@ -1089,7 +1059,7 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
    - 장기적인 경쟁력 확보
 
 """
-        return final_report
+        return basic_info_report + final_report
 
     except Exception as e:
         import traceback
@@ -1130,6 +1100,13 @@ def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, 
         LLM에게 전달할 완성된 프롬프트 문자열
     """
     try:
+        # 1. 공통 헬퍼 함수 호출
+        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        
+        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
+        if latest_store_data is None:
+            return basic_info_report
+
         # 데이터 정규화 유틸 함수들
         def fmt(x, digits=1):
             try:
@@ -1247,7 +1224,7 @@ def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, 
         prompt = build_prompt(QUESTION, data_block)
         
         # 최종 프롬프트 반환 (API 호출 제거)
-        return prompt
+        return basic_info_report + prompt
 
     except Exception as e:
         import traceback
@@ -1286,6 +1263,13 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
         LLM에게 전달할 완성된 프롬프트 문자열
     """
     try:
+        # 1. 공통 헬퍼 함수 호출
+        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        
+        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
+        if latest_store_data is None:
+            return basic_info_report
+
         # 데이터 도우미 함수
         def fmt(x, digits=1):
             try:
@@ -1378,7 +1362,7 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
         prompt = build_prompt(QUESTION, data_block)
         
         # 최종 프롬프트 반환 (API 호출 제거)
-        return prompt
+        return basic_info_report + prompt
 
     except Exception as e:
         import traceback
