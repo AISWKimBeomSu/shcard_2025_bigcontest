@@ -55,7 +55,7 @@ system_prompt = """당신은 사용자의 요청을 분석하여 최적의 솔�
 3. 찾아낸 가게 ID를 결정한 도구의 입력값으로 사용하여 실행합니다.
 4. 만약 가게 ID가 없다면, 사용자에게 정중하게 ID를 요청합니다.
 """
-greeting = "안녕하세요! 사장님의 든든한 성장 파트너, 솔비(Sol-B)입니다. 질문과 함께 가게 ID를 알려주세요. 예: '우리 가게의 강점과 약점을 분석해 줘 (가게 ID: ABC12345)'"
+greeting = "안녕하세요! 사장님의 든든한 AI 성장 파트너, 솔비(SOL-B)입니다. 질문과 함께 가게 ID를 알려주세요."
 
 # 데이터 로딩 함수
 @st.cache_data 
@@ -117,7 +117,7 @@ def clear_chat_history():
 
 # 페이지 설정
 st.set_page_config(
-    page_title="솔비(Sol-B) | AI 성장 파트너",
+    page_title="솔비(SOL-B) | AI 성장 파트너",
     page_icon="✨",
     layout="centered",
     initial_sidebar_state="expanded"
@@ -125,8 +125,8 @@ st.set_page_config(
 
 # 사이드바
 with st.sidebar:
-    st.image(load_image("shc_ci_basic_00.png"), width=400)
-    st.title("✨ AI 성장 파트너, 솔비(Sol-B)")
+    st.image(load_image("shc_ci_basic_00.png"), width=300)
+    st.title("✨ AI 성장 파트너, 솔비(SOL-B)")
     st.info("🏆  **2025 신한카드 빅콘테스트** 출품작")
     st.write("")
     st.button('새로운 상담 시작하기', on_click=clear_chat_history, use_container_width=True)
@@ -134,8 +134,8 @@ with st.sidebar:
 # 메인 컨테이너
 with st.container():
     # 헤더 섹션
-    st.markdown('<h1 class="main-title">우리가게 AI 성장 파트너, 솔비(Sol-B)</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="subtitle">복잡한 마케팅 고민, 이제 AI 파트너에게 맡겨주세요.</p>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-title"> 소상공인 AI 성장 파트너,  솔비(SOL-B)</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle">✨복잡한 마케팅 고민, 이제 AI 파트너에게 맡겨주세요.✨</p>', unsafe_allow_html=True)
     
     # 메인 이미지
     st.image(load_image("AI_Marketing_Counselor.png"), width='stretch', caption="✨사장님의 비즈니스 고민, 솔비가 데이터로 해결해 드릴게요.")
@@ -291,7 +291,7 @@ if df_all_join is not None:
     tool_executor = ToolExecutor(df_all_join, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population)
     agent = create_react_agent(llm, tool_executor.get_all_tools())
 
-    if query := st.chat_input("질문과 함께 가게 ID를 입력하세요. (예: 재방문율 분석해줘 (가게 ID: ABC12345))"):
+    if query := st.chat_input("질문과 함께 가게 ID를 입력하세요.(예: 재방문율 분석해줘 (가게 ID: ABC12345))"):
         st.session_state.messages.append(HumanMessage(content=query))
         with st.chat_message("user", avatar="🧑‍💼"):
             st.write(query)
