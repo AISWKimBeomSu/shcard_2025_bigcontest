@@ -152,7 +152,7 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 
 # DATA INPUT (너가 분석할 핵심 데이터)
 1. **[WHO] 우리 가게 핵심 고객 페르소나 (가장 중요한 기준점):**
-{main_personas_details_str}
+{main_personas_details_list}
 
 2. **[WHAT] 우리 가게의 시장 성공 전략 (고객을 공략할 우리만의 무기):**
 - '{core_strategy}'
@@ -323,7 +323,7 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
         if successful_peers.empty:
             return f"🟡 분석 보류: 성공 그룹을 찾을 수 없습니다."
 
-        # 3대 지표 계산
+        # 표준화된 평균 계산 함수
         def get_series_mean(series):
             series_cleaned = series.dropna()
             return 0.0 if series_cleaned.empty else series_cleaned.mean()
@@ -364,7 +364,7 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
         for key in analysis_results:
             analysis_results[key]['gap'] = analysis_results[key].get('target', np.nan) - analysis_results[key].get('peer_avg', np.nan)
         
-        # 페르소나 진단
+        # 페르소나 진단 (사전질문 2번 전용)
         gaps = {k: v['gap'] for k, v in analysis_results.items() if 'gap' in v and pd.notna(v['gap'])}
         if not gaps:
             persona = "분석 불가"
@@ -392,61 +392,326 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
             key_factor = "데이터 없음"
             key_strategy = "일반적인 개선 전략 필요"
 
-        # 최종 리포트 생성
+        # STAGE 3: 페르소나와 핵심성공전략 상세 분석
+        def get_stage3_analysis(persona, key_factor, key_strategy, analysis_results):
+            # 페르소나 상세 설명
+            persona_explanation = ""
+            if persona == "첫인상만 좋은 신규 매장":
+                persona_explanation = f"""
+**📊 페르소나 진단: '{persona}'**
+
+[데이터 근거]
+- 운영 기간: {translate_metric('tenure', target_store.get('MCT_OPE_MS_CN'))} (신규 매장)
+- 신규 고객 비율: {target_store.get('MCT_UE_CLN_NEW_RAT', 0):.1f}% (60% 초과)
+- 현재 재방문율: {target_revisit_rate:.2f}% (30% 미만)
+
+[페르소나 특성 분석]
+이 유형은 '첫 방문은 많지만 재방문이 적은' 전형적인 신규 매장 패턴입니다. 
+고객들이 첫 방문에서는 만족하지만, 재방문할 만한 충분한 동기나 명분을 제공하지 못하고 있습니다.
+신규 고객이 충성 고객으로 전환되는 '온보딩(Onboarding)' 과정에서 실패하고 있는 상황입니다."""
+            elif persona == "재방문하기엔 부담스러운 가격":
+                persona_explanation = f"""
+**📊 페르소나 진단: '{persona}'**
+
+[데이터 근거]
+- 객단가 수준: {translate_metric('level', target_store.get('RC_M1_AV_NP_AT'))} (최신월 기준)
+- 성공 그룹 대비 격차: {analysis_results['price_competitiveness']['gap']:.2f}점 (객단가 점수가 낮음)
+- 현재 재방문율: {target_revisit_rate:.2f}% (30% 미만)
+
+[페르소나 특성 분석]
+이 유형은 가격 경쟁력에서 성공 그룹 대비 명확한 격차를 보이는 매장입니다.
+고객들이 첫 방문 후 '가격이 부담스럽다'는 인식을 가지고 재방문을 꺼리는 상황입니다.
+단순히 가격을 낮추는 것이 아니라, 가격 대비 가치를 높이는 전략이 필요합니다."""
+            elif persona == "동네 주민을 사로잡지 못하는 매장":
+                persona_explanation = f"""
+**📊 페르소나 진단: '{persona}'**
+
+[데이터 근거]
+- 거주 고객 비율: {analysis_results['audience_alignment'].get('target', 0):.1f}% (월 평균)
+- 성공 그룹 대비 격차: {analysis_results['audience_alignment']['gap']:.1f}%p (거주 고객 부족)
+- 현재 재방문율: {target_revisit_rate:.2f}% (30% 미만)
+
+[페르소나 특성 분석]
+이 유형은 동네 주민 고객 확보에 실패한 매장입니다.
+성공 그룹 대비 거주 고객 비율이 현저히 낮아, 단골 고객 기반이 약한 상황입니다.
+지역 커뮤니티와의 관계 구축이 시급한 과제입니다."""
+            elif persona == "배달 채널 부재":
+                persona_explanation = f"""
+**📊 페르소나 진단: '{persona}'**
+
+[데이터 근거]
+- 배달 매출 비중: {target_delivery_ratio_avg:.1f}% (월 평균, 배달 미운영)
+- 성공 그룹 대비 격차: {analysis_results['channel_expansion']['gap']:.1f}%p (배달 채널 부재)
+- 현재 재방문율: {target_revisit_rate:.2f}% (30% 미만)
+
+[페르소나 특성 분석]
+이 유형은 배달 채널을 전혀 활용하지 않는 매장입니다.
+현대 고객의 다양한 소비 패턴(매장 방문 + 배달 주문)을 충족시키지 못하고 있습니다.
+온라인 고객 접점 확보가 시급한 과제입니다."""
+            else:  # "총체적 마케팅 부재"
+                persona_explanation = f"""
+**📊 페르소나 진단: '{persona}'**
+
+[데이터 근거]
+- 가격 경쟁력 격차: {analysis_results['price_competitiveness']['gap']:.2f}점
+- 거주 고객 격차: {analysis_results['audience_alignment']['gap']:.1f}%p  
+- 배달 채널 격차: {analysis_results['channel_expansion']['gap']:.1f}%p
+- 현재 재방문율: {target_revisit_rate:.2f}% (30% 미만)
+
+[페르소나 특성 분석]
+이 유형은 3가지 핵심 동인 모두에서 성공 그룹 대비 부족한 매장입니다.
+개별 지표의 문제라기보다는 전체적인 마케팅 전략과 고객 관리 시스템이 부재한 상황입니다.
+체계적인 마케팅 인프라 구축이 시급한 과제입니다."""
+
+            # 핵심성공전략 상세 설명
+            strategy_explanation = f"""
+**🎯 핵심 성공 전략: '{key_factor}'**
+
+[데이터 근거]
+- 업종/상권: {industry} / {area_name}
+- 성공 그룹 분석 결과 도출된 핵심 성공 변수
+
+[전략 상세 분석]
+'{key_strategy}'
+
+이 전략은 동일 업종, 동일 상권 내에서 재방문율이 높은 성공 그룹의 공통된 특징을 분석한 결과입니다.
+데이터 기반으로 검증된 성공 방정식이므로, 이를 기반으로 한 마케팅 전략 수립이 효과적입니다."""
+
+            return persona_explanation + strategy_explanation
+
+        # STAGE 4: 페르소나 + 핵심성공전략 융합 마케팅 전략
+        def get_stage4_integrated_strategy(persona, key_factor, key_strategy, analysis_results):
+            # 페르소나별 전략 템플릿
+            persona_strategies = {
+                "첫인상만 좋은 신규 매장": f"""
+**🎯 '{persona}' 전용 고객 온보딩 전략**
+
+[데이터 기반 전략 근거]
+- 신규 고객 비율: {target_store.get('MCT_UE_CLN_NEW_RAT', 0):.1f}% (60% 초과)
+- 운영 기간: {translate_metric('tenure', target_store.get('MCT_OPE_MS_CN'))}
+- 문제점: 첫 방문은 많지만 재방문 전환율이 낮음
+
+[구체적 실행 방안]
+1. **'첫 만남 각인' 시스템 구축**
+   - 첫 방문 고객 100% 대상: "다음 방문 시 대표메뉴 1개 무료" 쿠폰 증정
+   - 쿠폰 유효기간: 7일 (긴급성 조성)
+   - 쿠폰 사용률 추적: 목표 40% 이상
+
+2. **'단골 네비게이션' 프로그램**
+   - 2-3회차 방문 고객: "사장님 추천 숨겨진 메뉴 조합" 안내
+   - VIP 고객 전용 서비스: 메뉴판에 없는 특별 메뉴 제공
+   - 고객별 선호도 기록 시스템 구축
+
+3. **'재방문 동기 부여' 캠페인**
+   - 월간 "신규 고객 → 단골 고객" 전환 이벤트
+   - 연속 방문 고객 누적 혜택 시스템 (3회→5회→10회 방문 시 차등 혜택)
+""",
+                "재방문하기엔 부담스러운 가격": f"""
+**🎯 '{persona}' 전용 가격 가치 전략**
+
+[데이터 기반 전략 근거]
+- 객단가 수준: {translate_metric('level', target_store.get('RC_M1_AV_NP_AT'))} (최신월 기준)
+- 성공 그룹 대비 격차: {analysis_results['price_competitiveness']['gap']:.2f}점 (객단가 점수가 낮음)
+- 문제점: 가격 대비 가치 인식 부족으로 재방문 저조
+
+[구체적 실행 방안]
+1. **'디코이 효과(Decoy Effect)' 메뉴 재구성**
+   - 가장 비싼 대표메뉴(Anchor) 옆에 "실속 메뉴" 배치
+   - 실속 메뉴: 양은 80%, 가격은 60%로 설정하여 가치 인식 극대화
+   - 메뉴판 레이아웃: 고가 메뉴 → 실속 메뉴 → 일반 메뉴 순서로 배치
+
+2. **'가치부가형 번들링' 시스템**
+   - 메인 메뉴 주문 시: 마진 높은 음료/사이드 무료 증정
+   - "오늘의 특별 조합" 메뉴: 개별 주문 대비 20% 할인
+   - 가치 인식 강화: "총 가치 OO원 → OO원" 표시
+
+3. **'가격 투명성' 마케팅**
+   - 재료비, 인건비 등 비용 구조 투명 공개
+   - "왜 이 가격인가?" 스토리텔링으로 가치 인식 개선
+   - 고객 리뷰에 가격 대비 만족도 강조
+""",
+                "동네 주민을 사로잡지 못하는 매장": f"""
+**🎯 '{persona}' 전용 지역 커뮤니티 전략**
+
+[데이터 기반 전략 근거]
+- 거주 고객 비율: {analysis_results['audience_alignment'].get('target', 0):.1f}% (월 평균)
+- 성공 그룹 대비 격차: {analysis_results['audience_alignment']['gap']:.1f}%p (거주 고객 부족)
+- 문제점: 동네 주민 고객 확보 실패로 단골 고객 기반 약함
+
+[구체적 실행 방안]
+1. **'우리 동네 멤버십' 시스템**
+   - 주민 인증 방법: 주소지 증명서 또는 동네 상점 영수증 제시
+   - 주민 전용 혜택: 포인트 2배 적립, 월간 스페셜 메뉴 제공
+   - 주민 전용 이벤트: "동네 맛집 투어", "이웃과 함께하는 식사" 등
+
+2. **'로컬 인플루언서' 파트너십**
+   - 지역 맘카페 운영진 초청: 무료 시식 및 진정성 있는 후기 유도
+   - 소규모 맛집 블로거 협력: "숨겨진 동네 맛집" 콘텐츠 제작
+   - 지역 SNS 그룹 참여: 동네 소식 공유 및 자연스러운 홍보
+
+3. **'지역 사회 기여' 활동**
+   - 동네 행사 참여: 축제, 마을 잔치 등에서 부스 운영
+   - 지역 단체 후원: 소상공인회, 동네 모임 등과 협력
+   - 지역 취약계층 지원: 할인 혜택 제공으로 사회적 가치 창출
+""",
+                "배달 채널 부재": f"""
+**🎯 '{persona}' 전용 배달 채널 구축 전략**
+
+[데이터 기반 전략 근거]
+- 배달 매출 비중: {target_delivery_ratio_avg:.1f}% (월 평균, 배달 미운영)
+- 성공 그룹 대비 격차: {analysis_results['channel_expansion']['gap']:.1f}%p (배달 채널 부재)
+- 문제점: 온라인 고객 접점 부재로 현대 고객 소비 패턴 미충족
+
+[구체적 실행 방안]
+1. **'배달앱 최적화' 전략**
+   - 주요 배달앱 등록: 배민, 요기요, 쿠팡이츠 등 3개 이상 플랫폼 활용
+   - 배달 전용 메뉴 구성: 포장 최적화된 메뉴, 배달 전용 사이즈 제공
+   - 배달 리뷰 관리: 4.5점 이상 유지, 고객 피드백 즉시 반영
+
+2. **'O2O 연계 프로모션' 시스템**
+   - 배달 주문 시: "매장 방문 시 사용 가능한 음료 쿠폰" 동봉
+   - 매장 방문 고객: "배달 주문 시 사용 가능한 할인 쿠폰" 제공
+   - 크로스 채널 데이터 분석: 배달→매장, 매장→배달 고객 전환율 추적
+
+3. **'배달 데이터 활용' 마케팅**
+   - 인기 배달 메뉴 분석: 오프라인 "타임 세일" 상품으로 기획
+   - 배달 주문 패턴 분석: 피크타임 예측 및 재고 관리 최적화
+   - 배달 고객 세분화: 지역별, 시간대별 맞춤 프로모션 실행
+""",
+                "총체적 마케팅 부재": f"""
+**🎯 '{persona}' 전용 D2C 채널 구축 전략**
+
+[데이터 기반 전략 근거]
+- 가격 경쟁력 격차: {analysis_results['price_competitiveness']['gap']:.2f}점
+- 거주 고객 격차: {analysis_results['audience_alignment']['gap']:.1f}%p  
+- 배달 채널 격차: {analysis_results['channel_expansion']['gap']:.1f}%p
+- 문제점: 전체적인 마케팅 전략과 고객 관리 시스템 부재
+
+[구체적 실행 방안]
+1. **'고객 자산화' 시스템 구축**
+   - 카카오톡 채널 개설: 테이블마다 "친구 추가 시 대표메뉴 1+1 쿠폰" 제공
+   - 고객 DB 구축: 방문 빈도, 선호 메뉴, 생일 등 개인화 정보 수집
+   - 고객 세분화: VIP, 일반, 신규 고객별 차별화된 서비스 제공
+
+2. **'자동화 CRM' 시나리오**
+   - 가입 1달 후: "감사 쿠폰" 자동 발송
+   - 생일 당일: "생일 축하 쿠폰" 자동 발송
+   - 2주 미방문: "한동안 뜸했네요 쿠폰" 자동 발송
+   - 계절별: "계절 메뉴 출시 알림" 및 "시즌 쿠폰" 제공
+
+3. **'통합 마케팅 플랫폼' 구축**
+   - 온라인/오프라인 통합 포인트 시스템
+   - 고객 여정 전체 추적: 인지→관심→방문→재방문→추천 단계별 관리
+   - 데이터 기반 개인화 마케팅: 고객별 맞춤 메뉴 추천, 프로모션 제공
+"""
+            }
+            
+            # 선택된 페르소나의 전략 가져오기
+            selected_strategy = persona_strategies.get(persona, "")
+            
+            return f"""
+**🚀 마케팅 전문가 데이터 기반 통합 전략 컨설팅**
+
+[전략 융합 근거 및 데이터 분석]
+'{persona}' 페르소나 진단 결과와 '{key_factor}' 핵심 성공 전략을 융합하여, 
+동일 업종/상권 성공 그룹의 검증된 데이터를 기반으로 사장님 가게만의 맞춤형 마케팅 전략을 제시합니다.
+
+**📊 핵심 성과 지표 (KPI) 설정**
+- **현재 재방문율**: {target_revisit_rate:.2f}% → **목표 재방문율**: 30% 이상 (성공 그룹 기준)
+- **개선 필요 지표**: 가격경쟁력({analysis_results['price_competitiveness']['gap']:.2f}점), 거주고객({analysis_results['audience_alignment']['gap']:.1f}%p), 배달채널({analysis_results['channel_expansion']['gap']:.1f}%p)
+- **검증된 성공 공식**: '{key_strategy}' (동일 업종/상권 성공 그룹 데이터 분석 결과)
+
+**💡 페르소나 맞춤형 즉시 실행 마케팅 전략**
+
+{selected_strategy}
+
+**🎯 핵심 성공 전략 기반 차별화 전략**
+
+[전략 융합 및 실행 방안]
+'{key_strategy}' 전략을 '{persona}' 페르소나 특성과 융합하여 다음과 같이 실행합니다:
+
+1. **성공 그룹 벤치마킹 전략**
+   - 동일 업종/상권 성공 그룹의 공통 특징 분석 결과 활용
+   - 성공 그룹 대비 부족한 지표 집중 개선
+   - 검증된 성공 방정식의 단계별 적용
+
+2. **데이터 기반 전략 조정**
+   - 월간 성과 측정 및 전략 수정
+   - A/B 테스트를 통한 최적 전략 도출
+   - 고객 피드백 기반 서비스 개선
+
+**📊 데이터 기반 성과 측정 및 최적화 시스템**
+
+1. **핵심 지표 모니터링**
+   - 재방문율: {target_revisit_rate:.2f}% → 목표 30% 이상 (월간 추적)
+   - 고객 세분화별 방문 패턴: 신규/기존/VIP 고객별 분석
+   - 마케팅 채널별 ROI: 배달/매장/온라인 채널별 수익성 분석
+
+2. **실시간 데이터 분석**
+   - 일일 매출, 고객수, 객단가 추적
+   - 고객 만족도 조사 (월 1회)
+   - 경쟁사 대비 포지셔닝 분석 (분기 1회)
+
+3. **전략 최적화 사이클**
+   - 1주차: 즉시 실행 전략 도입 및 초기 반응 측정
+   - 2-4주차: 데이터 분석 기반 전략 미세 조정
+   - 1-3개월: 성과 평가 및 중장기 전략 수립
+
+**🎯 예상 성과 및 ROI**
+
+[데이터 기반 성과 예측]
+- 재방문율 개선: {target_revisit_rate:.2f}% → 30% 이상 (목표 달성 시 월 매출 20-30% 증가 예상)
+- 고객 생애가치(LTV) 향상: 단발성 고객 → 충성 고객 전환으로 장기 수익성 개선
+- 마케팅 효율성 증대: 데이터 기반 타겟팅으로 마케팅 비용 대비 효과 극대화
+
+[투자 대비 수익률]
+- 초기 투자: 시스템 구축 및 마케팅 비용
+- 예상 회수 기간: 2-3개월 (재방문율 30% 달성 기준)
+- 장기 수익: 충성 고객 기반 안정적 매출 증대"""
+
+        # 최종 리포트 생성 (원본 로컬 코드 구조 반영)
         final_report = f"""
 ======================================================================
-      🩺 AI 재방문율 진단 - '{store_id}' 가맹점 분석 리포트
+🩺 AI 하이브리드 전략 컨설팅 - '{store_id}' 가맹점 분석 리포트
 ======================================================================
 
-### 1단계: 현재 상황 진단 (**필수 출력**)
+---------- [STAGE 1] 우리 가게 현황 브리핑 ----------
+  - 업종 / 상권: {industry} / {area_name}
+  - 운영 기간: {translate_metric('tenure', target_store.get('MCT_OPE_MS_CN'))}
+  - 현재 재방문율 (월 평균): {target_revisit_rate:.2f}% (⚠️ 개선 필요)
+  - 매출액 수준 (최신월 기준): {translate_metric('level', target_store.get('RC_M1_SAA'))}
+  - 객단가 수준 (최신월 기준): {translate_metric('level', target_store.get('RC_M1_AV_NP_AT'))}
 
-* **업종/상권:** {industry} / {area_name}
-* **현재 재방문율:** {target_revisit_rate:.1f}% (월 평균)
-* **AI 진단 페르소나:** {persona}
+---------- [STAGE 2] 재방문율 핵심 동인(Key Drivers) 3차원 분석 ----------
+같은 '{industry}' 업종 '{area_name}' 상권 내 성공 그룹과 3가지 핵심 동인을 비교한 결과입니다.
 
-### 2단계: 3대 핵심 동인 분석 (**필수 출력**)
+  ① 가격 경쟁력 (객단가)
+    - 내 가게 수준 (최신월): {translate_metric('level', target_store.get('RC_M1_AV_NP_AT'))} (월별 평균점수: {analysis_results['price_competitiveness']['target']:.2f})
+    - 성공 그룹 평균: {score_to_level_text(analysis_results['price_competitiveness']['peer_avg'])} (월별 평균점수: {analysis_results['price_competitiveness']['peer_avg']:.2f})
+    - 격차: {analysis_results['price_competitiveness']['gap']:.2f}점
+    - ➡️ AI 분석: {'성공 그룹보다 객단가가 높아(점수가 낮아), 고객이 재방문하기에 부담을 느낄 수 있습니다.' if analysis_results['price_competitiveness'].get('gap', 0) < 0 else '객단가 수준은 경쟁 그룹 대비 양호합니다. 가격보다는 다른 요소를 먼저 개선해야 합니다.'}
 
-**① 가격 경쟁력 (객단가)**
-- 내 가게: {target_price_score_avg:.2f}점
-- 성공 그룹 평균: {peer_price_score_avg:.2f}점
-- 격차: {analysis_results['price_competitiveness']['gap']:.2f}점
+  ② 핵심 고객층 (거주자)
+    - 내 가게 비율 (월 평균): {analysis_results['audience_alignment'].get('target', 0):.1f}%
+    - 성공 그룹 평균: {analysis_results['audience_alignment'].get('peer_avg', 0):.1f}%
+    - 격차: {analysis_results['audience_alignment']['gap']:.1f}%p
+    - ➡️ AI 분석: {f"동네 주민 고객을 '{abs(analysis_results['audience_alignment']['gap']):.1f}%p' 만큼 더 확보할 수 있는 기회가 있습니다." if analysis_results['audience_alignment'].get('gap', 0) < 0 else '동네 주민 고객 확보는 양호한 수준입니다.'}
+        
+  ③ 채널 확장성 (배달)
+    - 내 가게 배달매출 비중 (월 평균): {target_delivery_ratio_avg:.1f}% {'(배달 미운영)' if is_delivery_not_operated else ''}
+    - 성공 그룹 평균: {analysis_results['channel_expansion'].get('peer_avg', 0):.1f}%
+    - 격차: {analysis_results['channel_expansion']['gap']:.1f}%p
+    - ➡️ AI 분석: {'배달을 운영하지 않는 것으로 확인됩니다.' if is_delivery_not_operated else (f"성공 그룹 대비 배달 매출 비중이 '{abs(analysis_results['channel_expansion']['gap']):.1f}%p' 낮아, 온라인 잠재 고객을 놓치고 있습니다." if analysis_results['channel_expansion'].get('gap', 0) < 0 else '배달 채널은 경쟁력 있게 운영되고 있습니다.')}
 
-**② 핵심 고객층 (거주자 비율)**
-- 내 가게: {target_resident_ratio_avg:.1f}%
-- 성공 그룹 평균: {peer_resident_ratio_avg:.1f}%
-- 격차: {analysis_results['audience_alignment']['gap']:.1f}%p
+📊 AI 종합 진단: 위 3가지 동인을 종합 분석한 결과, 사장님 가게의 현재 가장 시급한 개선 과제는 '{persona}' 유형에 해당합니다.
 
-**③ 채널 확장성 (배달 비율)**
-- 내 가게: {target_delivery_ratio_avg:.1f}%
-- 성공 그룹 평균: {peer_delivery_avg:.1f}%
-- 격차: {analysis_results['channel_expansion']['gap']:.1f}%p
+---------- [STAGE 3] 페르소나 & 핵심성공전략 상세 분석 ----------
+{get_stage3_analysis(persona, key_factor, key_strategy, analysis_results)}
 
-### 3단계: 개선 전략 제안 (**필수 출력**)
+---------- [STAGE 4] 데이터 기반 통합 마케팅 전략 제안 ----------
+{get_stage4_integrated_strategy(persona, key_factor, key_strategy, analysis_results)}
 
-**핵심 성공 변수:** {key_factor}
-**핵심 경영 전략:** {key_strategy}
-
-**A/B 전략 옵션:** (**필수 출력**)
-
-**전략 A (강점 강화/차별화):** (**필수 출력**)
-- 현재 잘하고 있는 부분을 더욱 강화
-- 시장의 규칙을 따르는 대신 새로운 규칙을 만드는 전략
-
-**전략 B (약점 보완/동기화):** (**필수 출력**)
-- 성공 그룹의 전략을 벤치마킹
-- 안정적인 성공 방정식을 따르는 전략
-
-### 💡 즉시 실행 가능한 액션 플랜 (**필수 출력**)
-
-1. **단기 긴급 처방 (1-2주)**
-   - {persona} 문제 해결을 위한 즉시 실행 가능한 솔루션
-
-2. **중장기 핵심 전략 (1-3개월)**
-   - {key_strategy} 기반의 체계적인 개선 계획
-
-3. **성과 측정 및 최적화**
-   - 재방문율 변화 모니터링 및 전략 조정
-
+======================================================================
 """
         return final_report
 
