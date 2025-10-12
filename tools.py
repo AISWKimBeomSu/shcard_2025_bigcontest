@@ -77,7 +77,7 @@ def _get_store_basic_info(store_id: str, df_all_join: pd.DataFrame) -> tuple[str
     latest_result = store_data.sort_values(by='TA_YM', ascending=False).iloc[0]
     
     # 기본 정보 추출
-    store_name = latest_result.get('가맹점명', '정보 없음')
+    store_name = latest_result.get('MCT_NM', '정보 없음')
     industry = latest_result.get('업종_정규화2_대분류', '정보 없음')
     commercial_area = latest_result.get('HPSN_MCT_BZN_CD_NM', '비상권')
     operation_period = latest_result.get('MCT_OPE_MS_CN', '정보 없음')
@@ -94,12 +94,8 @@ def _get_store_basic_info(store_id: str, df_all_join: pd.DataFrame) -> tuple[str
     resident_ratio = latest_result.get('RC_M1_SHC_RSD_UE_CLN_RAT', 0)
     delivery_ratio = latest_result.get('DLV_SAA_RAT', 0)
     
-    # 기본 정보 리포트 생성
-    basic_info_report = f"""
-======================================================================
-      🏪 가맹점 기본 정보 ({store_id})
-======================================================================
-
+    # 기본 정보 '내용' 생성 (헤더 제외)
+    basic_info_content = f"""
 ### 📋 기본 정보
 - **가맹점명:** {store_name}
 - **업종:** {industry}
@@ -117,8 +113,10 @@ def _get_store_basic_info(store_id: str, df_all_join: pd.DataFrame) -> tuple[str
 - **재방문 고객 비율:** {revisit_ratio:.1f}%
 - **거주 고객 비율:** {resident_ratio:.1f}%
 - **배달 매출 비율:** {delivery_ratio:.1f}%
-"""
-    return basic_info_report, latest_result
+
+---
+""" # 구분을 위해 가로선을 추가합니다.
+    return basic_info_content, latest_result
 
 # =============================================================================
 # 모델 1: 카페 업종 주요 고객 분석 및 마케팅 채널/홍보안 추천
@@ -154,16 +152,15 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
         분석 결과 및 마케팅 전략 제안 리포트
     """
     try:
-        # 1. 공통 헬퍼 함수 호출
-        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
+        basic_info_content, latest_store_data = _get_store_basic_info(store_id, df_all_join)
         
-        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
         if latest_store_data is None:
-            return basic_info_report
+            return basic_info_content # 오류 메시지는 그대로 반환
 
-        # 3. 카페 업종 확인
+        # 2. 카페 업종 확인
         if latest_store_data['업종_정규화2_대분류'] != '카페':
-            return basic_info_report + f"\n🚨 분석 실패: '{store_id}' 가맹점은 '카페' 업종이 아닙니다."
+            return basic_info_content + f"\n🚨 분석 실패: '{store_id}' 가맹점은 '카페' 업종이 아닙니다."
 
         # 1단계: 데이터 분석 엔진
         # [수정] 동적 고객 분석 로직
@@ -301,10 +298,13 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
         # 여기서는 데이터 분석 결과만 명확히 제시하고 LLM에게 보낼 프롬프트를 그대로 전달하여
         # Agent가 LLM을 호출하고 그 응답을 자연스럽게 이어붙이도록 합니다.
 
+        # 최종 통합 리포트 생성
         final_report = f"""
 ======================================================================
-      🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
+🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
 ======================================================================
+
+{basic_info_content}
 
 1. 우리 가게 주요 고객 특징 분석 (페르소나 기반)
 
@@ -319,7 +319,8 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 (AI가 아래 프롬프트를 바탕으로 답변을 생성합니다.)
 {prompt_for_gemini}
 """
-        return basic_info_report + final_report
+        # 2. 통합된 리포트 하나만 반환
+        return final_report
 
     except Exception as e:
         import traceback
@@ -358,12 +359,11 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
         재방문율 분석 및 개선 전략 리포트
     """
     try:
-        # 1. 공통 헬퍼 함수 호출
-        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
+        basic_info_content, latest_store_data = _get_store_basic_info(store_id, df_all_join)
         
-        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
         if latest_store_data is None:
-            return basic_info_report
+            return basic_info_content # 오류 메시지는 그대로 반환
 
         # 점수 컬럼 생성 (필요한 경우)
         score_cols = ['MCT_OPE_MS_CN', 'RC_M1_TO_UE_CT', 'RC_M1_SAA', 'RC_M1_AV_NP_AT']
@@ -746,11 +746,13 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
 - 예상 회수 기간: 2-3개월 (재방문율 30% 달성 기준)
 - 장기 수익: 충성 고객 기반 안정적 매출 증대"""
 
-        # 최종 리포트 생성 (원본 로컬 코드 구조 반영)
+        # 최종 통합 리포트 생성
         final_report = f"""
 ======================================================================
 🩺 AI 하이브리드 전략 컨설팅 - '{store_id}' 가맹점 분석 리포트
 ======================================================================
+
+{basic_info_content}
 
 ---------- [STAGE 1] 우리 가게 현황 브리핑 ----------
   - 업종 / 상권: {industry} / {area_name}
@@ -790,7 +792,8 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
 
 ======================================================================
 """
-        return basic_info_report + final_report
+        # 2. 통합된 리포트 하나만 반환
+        return final_report
 
     except Exception as e:
         import traceback
@@ -880,12 +883,11 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         강점/약점 분석 및 개선 솔루션 리포트
     """
     try:
-        # 1. 공통 헬퍼 함수 호출
-        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
+        basic_info_content, latest_store_data = _get_store_basic_info(store_id, df_all_join)
         
-        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
         if latest_store_data is None:
-            return basic_info_report
+            return basic_info_content # 오류 메시지는 그대로 반환
 
         store_df = df_all_join[df_all_join['ENCODED_MCT'] == store_id].tail(12)
         category, commercial_area = latest_store_data['업종_정규화2_대분류'], latest_store_data['HPSN_MCT_BZN_CD_NM']
@@ -971,11 +973,13 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         sorted_strengths = sorted(strengths, key=lambda x: float(x['score'].split('점')[0]), reverse=True)
         sorted_weaknesses = sorted(weaknesses, key=lambda x: float(x['score'].split('점')[0]))
 
-        # 최종 리포트 생성
+        # 최종 통합 리포트 생성
         final_report = f"""
 ======================================================================
-      📊 AI 전방위 진단 - '{store_id}' 가맹점 건강도 분석 리포트
+📊 AI 전방위 진단 - '{store_id}' 가맹점 건강도 분석 리포트
 ======================================================================
+
+{basic_info_content}
 
 ### 📈 분석 개요
 
@@ -1059,7 +1063,8 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
    - 장기적인 경쟁력 확보
 
 """
-        return basic_info_report + final_report
+        # 2. 통합된 리포트 하나만 반환
+        return final_report
 
     except Exception as e:
         import traceback
@@ -1100,12 +1105,11 @@ def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, 
         LLM에게 전달할 완성된 프롬프트 문자열
     """
     try:
-        # 1. 공통 헬퍼 함수 호출
-        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
+        basic_info_content, latest_store_data = _get_store_basic_info(store_id, df_all_join)
         
-        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
         if latest_store_data is None:
-            return basic_info_report
+            return basic_info_content # 오류 메시지는 그대로 반환
 
         # 데이터 정규화 유틸 함수들
         def fmt(x, digits=1):
@@ -1223,8 +1227,18 @@ def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, 
         data_block = make_data_block(monthly, df_gender_age, df_weekday_weekend, df_dayofweek, df_timeband, shop_row)
         prompt = build_prompt(QUESTION, data_block)
         
-        # 최종 프롬프트 반환 (API 호출 제거)
-        return basic_info_report + prompt
+        # 최종 통합 리포트 생성
+        final_report = f"""
+======================================================================
+🚇 유동인구 기반 재방문 유도 전략 - '{store_id}' 가맹점 분석 리포트
+======================================================================
+
+{basic_info_content}
+
+{prompt}
+"""
+        # 2. 통합된 리포트 하나만 반환
+        return final_report
 
     except Exception as e:
         import traceback
@@ -1263,12 +1277,11 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
         LLM에게 전달할 완성된 프롬프트 문자열
     """
     try:
-        # 1. 공통 헬퍼 함수 호출
-        basic_info_report, latest_store_data = _get_store_basic_info(store_id, df_all_join)
+        # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
+        basic_info_content, latest_store_data = _get_store_basic_info(store_id, df_all_join)
         
-        # 2. 가맹점 정보가 없으면 오류 리포트만 반환
         if latest_store_data is None:
-            return basic_info_report
+            return basic_info_content # 오류 메시지는 그대로 반환
 
         # 데이터 도우미 함수
         def fmt(x, digits=1):
@@ -1361,8 +1374,18 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
         data_block = make_data_block(monthly, df_gender_age, df_weekday_weekend, df_dayofweek, df_timeband, shop_row)
         prompt = build_prompt(QUESTION, data_block)
         
-        # 최종 프롬프트 반환 (API 호출 제거)
-        return basic_info_report + prompt
+        # 최종 통합 리포트 생성
+        final_report = f"""
+======================================================================
+🍽️ 점심시간 회전율 극대화 전략 - '{store_id}' 가맹점 분석 리포트
+======================================================================
+
+{basic_info_content}
+
+{prompt}
+"""
+        # 2. 통합된 리포트 하나만 반환
+        return final_report
 
     except Exception as e:
         import traceback
