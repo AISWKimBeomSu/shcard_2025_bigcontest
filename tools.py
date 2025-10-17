@@ -380,7 +380,7 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
 
         if target_revisit_rate >= 30:
             latest_month = target_store.get('TA_YM', '최신')
-            return f"✅ 분석 결과: 월 평균 재방문율이 {target_revisit_rate:.1f}%로 양호합니다. (최신월: {latest_month})"
+            return f"📣 분석 결과: 월 평균 재방문율이 {target_revisit_rate:.1f}%로 양호합니다. (최신월: {latest_month})"
 
         industry, commercial_area = target_store['업종_정규화2_대분류'], target_store['HPSN_MCT_BZN_CD_NM']
         area_name = commercial_area if pd.notna(commercial_area) else "비상권"
@@ -393,12 +393,12 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
             peer_group = df_all_join[peer_group_filter & (df_all_join['HPSN_MCT_BZN_CD_NM'] == commercial_area)]
 
         if len(peer_group) < 3:
-            return f"🟡 분석 보류: 비교 분석을 위한 경쟁 그룹이 부족합니다."
+            return f"📣 분석 보류: 비교 분석을 위한 경쟁 그룹이 부족합니다."
             
         revisit_threshold = peer_group['MCT_UE_CLN_REU_RAT'].quantile(0.5)
         successful_peers = peer_group[peer_group['MCT_UE_CLN_REU_RAT'] >= revisit_threshold]
         if successful_peers.empty:
-            return f"🟡 분석 보류: 성공 그룹을 찾을 수 없습니다."
+            return f"📣 분석 보류: 성공 그룹을 찾을 수 없습니다."
 
         # 표준화된 평균 계산 함수
         def get_series_mean(series):
@@ -824,7 +824,7 @@ def apply_emphasis(score):
     return max(0, min(100, (y * 50) + 50))
 
 def get_percentile_score(store_value, benchmark_series, higher_is_better=True):
-    """경쟁 그룹 내 백분위 순위를 0-100점 척도의 '건강 점수'로 변환하고 가중치를 적용"""
+    """경쟁 그룹 내 백분위 순위를 0-100점 척도의 '경영 점수'로 변환하고 가중치를 적용"""
     if pd.isna(store_value) or benchmark_series.empty:
         return 50
     combined = pd.concat([benchmark_series, pd.Series([store_value])])
@@ -976,7 +976,7 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         # 최종 통합 리포트 생성
         final_report = f"""
 ======================================================================
-📊 AI 전방위 진단 - '{store_id}' 가맹점 건강도 분석 리포트
+📊 AI 전방위 진단 - '{store_id}' 가맹점 경영 점수 분석 리포트
 ======================================================================
 
 {basic_info_content}
@@ -996,7 +996,7 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
                 score = float(s['score'].replace('점',''))
                 interpretation = f"경쟁점 대비 상위 {100-score:.0f}% 수준의 뛰어난 성과"
                 final_report += f"""
-**{i}. {s['metric']} (건강 점수: {s['score']})**
+**{i}. {s['metric']} (경영 점수: {s['score']})**
 - 해석: {interpretation}
 - 데이터: 우리 가게({s['store_value_display']}) vs 경쟁점({s['benchmark_value_display']})
 """
@@ -1013,7 +1013,7 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
                 score = float(w['score'].replace('점',''))
                 interpretation = f"경쟁점 대비 하위 {score:.0f}% 수준으로 개선이 필요함" if score < 40 else "전반적으로 양호하나 상대적으로 아쉬운 지표"
                 final_report += f"""
-**{i}. {w['metric']} (건강 점수: {w['score']})**
+**{i}. {w['metric']} (경영 점수: {w['score']})**
 - 해석: {interpretation}
 - 데이터: 우리 가게({w['store_value_display']}) vs 경쟁점({w['benchmark_value_display']})
 """
@@ -1021,7 +1021,7 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
             final_report += "특별한 약점이 발견되지 않았습니다.\n"
 
         final_report += """
-### 🚀 종합 진단 및 개선 솔루션
+### 📣 종합 진단 및 개선 솔루션
 
 **핵심 문제 진단:**
 """
