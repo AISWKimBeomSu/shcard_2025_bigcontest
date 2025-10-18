@@ -230,3 +230,6 @@ tmp/
 .venv/
 venv/
 env/
+
+
+/data/*.csv
