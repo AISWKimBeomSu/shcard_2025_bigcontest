@@ -7,23 +7,47 @@ import pandas as pd
 import numpy as np
 import requests
 import json
+import os
 from typing import Dict, Any, List, Tuple
+import google.generativeai as genai
 from langchain_core.tools import tool
 
 # =============================================================================
 # 공통 유틸리티 함수들
 # =============================================================================
 
-def get_score_from_raw(raw_value):
-    """원시 값을 점수로 변환하는 헬퍼 함수"""
-    if pd.isna(raw_value):
+def call_gemini_llm(prompt: str) -> str:
+    """Gemini 2.5 Flash LLM을 호출하여 응답을 반환하는 함수"""
+    try:
+        # API 키 설정
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            return "🚨 오류: Google API 키가 설정되지 않았습니다."
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        response = model.generate_content(prompt)
+        return response.text
+        
+    except Exception as e:
+        return f"🚨 LLM 호출 중 오류가 발생했습니다: {str(e)}"
+
+def get_score_from_raw(tier_string):
+    """
+    '1_10%이하' 또는 '6_90%초과' 같은 구간(tier) 문자열에서 
+    앞의 숫자(1~6)를 추출하여 반환합니다. 
+    이 숫자는 '낮을수록 좋음'을 의미합니다. 
+    """
+    if pd.isna(tier_string):
         return np.nan
-    raw_str = str(raw_value)
-    score_map = {"10%이하": 6, "10-25%": 5, "25-50%": 4, "50-75%": 3, "75-90%": 2, "90%초과": 1}
-    for key, score in score_map.items():
-        if key in raw_str:
-            return score
-    return np.nan
+    try:
+        # '1_10%이하' -> '1' -> 1
+        score = int(str(tier_string).split('_')[0])
+        return score
+    except (ValueError, IndexError, TypeError):
+        # 예외 발생 시 (e.g., 'N/A' 또는 잘못된 형식)
+        return np.nan
 
 def translate_metric(metric_type, raw_value):
     """지표를 사람이 이해하기 쉬운 텍스트로 변환"""
@@ -301,7 +325,7 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
         # 최종 통합 리포트 생성
         final_report = f"""
 ======================================================================
-🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
+      🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
 ======================================================================
 
 {basic_info_content}
@@ -902,7 +926,7 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         # 분석할 지표들 (실제 존재하는 컬럼명으로 수정)
         metrics_to_analyze = [
             {'name': '매출 규모', 'col': 'RC_M1_SAA', 'type': 'tier', 'higher_is_better': False},
-            {'name': '방문 고객 수', 'col': 'RC_M1_UE_CUS_CN', 'type': 'tier', 'higher_is_better': False},
+            {'name': '유니크 고객 수', 'col': 'RC_M1_UE_CUS_CN', 'type': 'tier', 'higher_is_better': False},
             {'name': '고객당 지출액(객단가)', 'col': 'RC_M1_AV_NP_AT', 'type': 'tier', 'higher_is_better': False},
             {'name': '업종 평균 대비 매출', 'col': 'M1_SME_RY_SAA_RAT', 'type': 'ratio', 'higher_is_better': True},
             {'name': '신규 고객 비율', 'col': 'MCT_UE_CLN_NEW_RAT', 'type': 'ratio', 'higher_is_better': True},
@@ -918,32 +942,50 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         if not has_delivery_data:
             metrics_to_analyze = [m for m in metrics_to_analyze if m['name'] != '배달 매출 비율']
 
+        # 벤치마크 기준 데이터 변경: 루프 시작 전에, 벤치마크 그룹의 '최신' 데이터만 모은 데이터프레임을 생성
+        benchmark_latest_df = benchmark_df.loc[benchmark_df.groupby('ENCODED_MCT')['TA_YM'].idxmax()]
+
         all_scores = []
         for metric in metrics_to_analyze:
             if metric['type'] == 'tier':
-                # tier 타입은 텍스트 값이므로 숫자로 변환
-                store_val = get_score_from_raw(store_df[metric['col']].iloc[-1]) if not store_df.empty else np.nan
-                benchmark_series = benchmark_df[metric['col']].apply(get_score_from_raw)
-            else:
-                # ratio 타입은 숫자 값
-                store_val = store_df[metric['col']].mean()
-                benchmark_series = benchmark_df.groupby('ENCODED_MCT')[metric['col']].mean()
+                # tier (구간) 타입 지표 처리
+                store_val = get_score_from_raw(latest_store_data[metric['col']])
+                benchmark_series = benchmark_latest_df[metric['col']].apply(get_score_from_raw)
+                score = get_percentile_score(store_val, benchmark_series.dropna(), metric['higher_is_better'])
+                
+                # [수정] translate_metric을 사용하여 LLM이 이해할 수 있는 텍스트로 변환
+                store_display = translate_metric('level', latest_store_data[metric['col']])
+                benchmark_display_mode = "N/A"
+                if not benchmark_latest_df.empty and not benchmark_latest_df[metric['col']].mode().empty:
+                    benchmark_display_mode = benchmark_latest_df[metric['col']].mode()[0]
+                benchmark_display = translate_metric('level', benchmark_display_mode)
+                    
+            elif metric['type'] == 'ratio':
+                # ratio (비율) 타입 지표 처리
+                # [수정] 점수 계산(store_val)과 표시(store_display_val)의 기준을 '최신 월' 데이터로 통일
+                store_val = latest_store_data[metric['col']]
+                # [수정] 벤치마크도 '최신 월' 데이터(benchmark_latest_df)를 기준으로 변경 (경쟁사들의 최신 월 값 리스트)
+                benchmark_series = benchmark_latest_df[metric['col']] 
+                
+                score = get_percentile_score(store_val, benchmark_series.dropna(), metric['higher_is_better'])
+                
+                store_display_val = store_val # 이미 최신 값이므로 그대로 사용
+                benchmark_display_val = benchmark_series.dropna().mean() # 경쟁사 최신 값들의 평균
+                
+                store_display = f"{store_display_val:.1f}%" if pd.notna(store_display_val) else "N/A"
+                benchmark_display = f"{benchmark_display_val:.1f}%" if pd.notna(benchmark_display_val) else "N/A"
             
-            score = get_percentile_score(store_val, benchmark_series, metric['higher_is_better'])
-            
-            store_display, benchmark_display = "", ""
-            if metric['type'] == 'ratio':
-                store_display = f"{store_val:.1%}"
-                benchmark_display = f"{benchmark_series.mean():.1%}"
-            elif metric['type'] == 'tier':
-                store_display = store_df[metric['col']].iloc[-1] if not store_df.empty else "N/A"
-                benchmark_display = benchmark_df[metric['col']].mode()[0] if not benchmark_df.empty and not benchmark_df[metric['col']].mode().empty else "N/A"
+            # NaN 값 처리
+            if pd.isna(score):
+                score = 50.0 # 중간값으로 처리
 
             all_scores.append({
                 'metric': metric['name'], 
                 'score': f"{score:.1f}점",
                 'store_value_display': store_display,
-                'benchmark_value_display': benchmark_display
+                'benchmark_value_display': benchmark_display,
+                'raw_score': score,
+                'higher_is_better': metric.get('higher_is_better', True) # 나중 LLM 프롬프트에 활용
             })
 
         # 고객 세그먼트 분석
@@ -957,7 +999,9 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
             'metric': '상권-고객 적합도', 
             'score': f"{match_score:.1f}점",
             'store_value_display': f"Top 2: {[n.replace('M12_','').replace('_RAT','') for n in store_top2.index.tolist()]}",
-            'benchmark_value_display': f"Top 2: {[n.replace('M12_','').replace('_RAT','') for n in area_top2.index.tolist()]}"
+            'benchmark_value_display': f"Top 2: {[n.replace('M12_','').replace('_RAT','') for n in area_top2.index.tolist()]}",
+            'raw_score': match_score,
+            'higher_is_better': True
         })
         
         # 강점과 약점 분류
@@ -973,96 +1017,69 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
         sorted_strengths = sorted(strengths, key=lambda x: float(x['score'].split('점')[0]), reverse=True)
         sorted_weaknesses = sorted(weaknesses, key=lambda x: float(x['score'].split('점')[0]))
 
-        # 최종 통합 리포트 생성
-        final_report = f"""
-======================================================================
-📊 AI 전방위 진단 - '{store_id}' 가맹점 경영 점수 분석 리포트
-======================================================================
+        # 1. LLM에 전달할 데이터 정리
+        # 리스트를 문자열로 변환
+        def format_metric_list(metric_list):
+            return "\n".join([
+                f"- {item['metric']} (경영 점수: {item['score']}): 우리 가게({item['store_value_display']}) vs 경쟁점({item['benchmark_value_display']})" 
+                for item in metric_list
+            ])
+            
+        strengths_str = format_metric_list(sorted_strengths)
+        weaknesses_str = format_metric_list(sorted_weaknesses)
+        
+        # 2. LLM 호출을 위한 프롬프트 구성
+        # (이 프롬프트는 Gemini 2.5 Flash를 위한 것입니다)
+        llm_prompt = f"""
+당신은 2025 신한카드 빅콘테스트의 'AI 비밀상담사'입니다. [cite: 2]
+당신의 임무는 영세/중소 요식 가맹점 점주에게 [cite: 12, 14] 데이터를 기반으로 [cite: 53] 실질적인 마케팅 전략을 제안하는 것입니다.
 
+지금부터 다음 데이터를 기반으로 '경영 분석 리포트'를 작성해주세요.
+점주가 바로 이해하고 실행할 수 있도록 [cite: 16] 구체적이고 설득력 있게 작성해야 합니다.
+
+[가맹점 기본 정보]
 {basic_info_content}
+분석 기준: {benchmark_type} (최근 12개월 데이터)
+업종/상권: {category} / {commercial_area if pd.notna(commercial_area) else '비상권'}
 
-### 📈 분석 개요
+[분석 결과: 강점]
+{strengths_str if sorted_strengths else "특별한 강점이 발견되지 않았습니다."}
 
-* **분석 대상:** {store_id}
-* **분석 기준:** {benchmark_type} (최근 12개월 데이터)
-* **업종/상권:** {category} / {commercial_area if pd.notna(commercial_area) else '비상권'}
+[분석 결과: 약점]
+{weaknesses_str if sorted_weaknesses else "특별한 약점이 발견되지 않았습니다."}
 
-### ✅ 강점 요약 (Top 3)
+---
+[리포트 작성 지시사항]
 
+1.  **📊 AI 전방위 진단 - '{store_id}' 가맹점 리포트**
+    * (제공된 [가맹점 기본 정보]를 여기에 먼저 포함하세요.)
+
+2.  **📈 분석 개요**
+    * (제공된 '분석 기준', '업종/상권' 정보를 여기에 포함하세요.)
+
+3.  **✅ 강점 요약 (Top 3)**
+    * (제공된 [분석 결과: 강점] 목록을 여기에 포함하세요.)
+
+4.  **❌ 약점 요약 (Top 3)**
+    * (제공된 [분석 결과: 약점] 목록을 여기에 포함하세요.)
+
+5.  **📣 핵심 문제 진단**
+    * [중요!] '약점 요약'에 나열된 **모든 약점을 종합적으로 분석**하여 이 가맹점이 겪는 **가장 근본적인 '핵심 문제'**를 한 문단으로 명확하게 진단해주세요.
+    * (예: "단순히 재방문율이 낮은 것이 문제가 아니라, [약점 1]과 [약점 2]가 결합되어 [구체적인 문제 상황]이 발생하고 있습니다.")
+
+6.  **💡 강점 기반 맞춤형 개선 솔루션**
+    * [매우 중요!] '핵심 문제 진단'에서 도출된 문제를 해결하기 위해, **[분석 결과: 강점]을 적극적으로 활용**하는 **구체적이고 실행 가능한 마케팅 전략**을 제안해주세요.
+    * '강점을 활용하여 약점을 보완'하는 전략이어야 합니다. [cite: 57]
+    * 점주가 **'무엇을, 왜, 어떻게'** 해야 하는지 명확히 알 수 있도록 구체적인 실행 방안을 제시해야 합니다. [cite: 16]
+    * (예: "[강점: 20대 여성 고객 비율 높음]을 활용하여 [약점: 객단가 낮음]을 개선하기 위한 '인스타그램 감성 세트 메뉴' 출시 전략...")
+
+7.  **💡 즉시 실행 가능한 액션 플랜 (1-4주)**
+    * 위 '개선 솔루션'을 바탕으로, 점주가 당장 1주차부터 4주차까지 실행할 수 있는 **구체적인 주차별 액션 플랜**을 2~3가지 제안해주세요.
+    * (예: "1주차: [구체적 활동 A]", "2-3주차: [구체적 활동 B]"...)
 """
         
-        if sorted_strengths:
-            for i, s in enumerate(sorted_strengths[:3], 1):
-                score = float(s['score'].replace('점',''))
-                interpretation = f"경쟁점 대비 상위 {100-score:.0f}% 수준의 뛰어난 성과"
-                final_report += f"""
-**{i}. {s['metric']} (경영 점수: {s['score']})**
-- 해석: {interpretation}
-- 데이터: 우리 가게({s['store_value_display']}) vs 경쟁점({s['benchmark_value_display']})
-"""
-        else:
-            final_report += "특별한 강점이 발견되지 않았습니다.\n"
-
-        final_report += """
-### ❌ 약점 요약 (Top 3)
-
-"""
-        
-        if sorted_weaknesses:
-            for i, w in enumerate(sorted_weaknesses[:3], 1):
-                score = float(w['score'].replace('점',''))
-                interpretation = f"경쟁점 대비 하위 {score:.0f}% 수준으로 개선이 필요함" if score < 40 else "전반적으로 양호하나 상대적으로 아쉬운 지표"
-                final_report += f"""
-**{i}. {w['metric']} (경영 점수: {w['score']})**
-- 해석: {interpretation}
-- 데이터: 우리 가게({w['store_value_display']}) vs 경쟁점({w['benchmark_value_display']})
-"""
-        else:
-            final_report += "특별한 약점이 발견되지 않았습니다.\n"
-
-        final_report += """
-### 📣 종합 진단 및 개선 솔루션
-
-**핵심 문제 진단:**
-"""
-        
-        if sorted_weaknesses:
-            main_weakness = sorted_weaknesses[0]
-            final_report += f"- 가장 시급한 개선 과제: {main_weakness['metric']}\n"
-            final_report += f"- 현재 수준: {main_weakness['store_value_display']}\n"
-            final_report += f"- 목표 수준: {main_weakness['benchmark_value_display']}\n"
-        else:
-            final_report += "- 전반적으로 양호한 상태입니다.\n"
-
-        final_report += """
-**마케팅 제안:**
-
-1. **강점 활용 전략**
-   - 현재 잘하고 있는 부분을 더욱 강화하여 경쟁 우위 확보
-   - 강점을 마케팅 포인트로 활용한 차별화 전략
-
-2. **약점 보완 전략**
-   - 가장 약한 부분부터 단계적으로 개선
-   - 성공 사례 벤치마킹을 통한 빠른 개선
-
-3. **통합 최적화 전략**
-   - 강점과 약점의 시너지 효과 창출
-   - 고객 경험 전반의 품질 향상
-
-### 💡 즉시 실행 가능한 액션 플랜
-
-1. **1주차: 긴급 개선**
-   - 가장 약한 지표 1개에 집중한 즉시 개선 조치
-
-2. **2-4주차: 단계적 개선**
-   - 나머지 약점들을 순차적으로 개선
-   - 강점을 더욱 강화하는 전략 실행
-
-3. **1-3개월: 지속적 최적화**
-   - 성과 측정 및 전략 조정
-   - 장기적인 경쟁력 확보
-
-"""
+        # 3. LLM 호출 및 결과 반환
+        final_report = call_gemini_llm(llm_prompt)
         # 2. 통합된 리포트 하나만 반환
         return final_report
 
@@ -1083,8 +1100,9 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
 
 **기술적 세부사항:**
 {error_details}"""
+        
 # =============================================================================
-# 특화 질문 도구들
+##특화질문 도구
 # =============================================================================
 
 @tool
@@ -1274,7 +1292,7 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
         df_timeband: 시간대별 유동인구 데이터
     
     Returns:
-        LLM에게 전달할 완성된 프롬프트 문자열
+        LLM이 생성한 완성된 분석 리포트 문자열
     """
     try:
         # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
@@ -1299,14 +1317,30 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
             shop_station = shop.get("HPSN_MCT_ZCD_NM", "지하철역 미상")
             shop_cat = shop.get("업종_정규화1", shop.get("업종_정규화2_대분류", "업종 미상"))
             shop_month = shop.get("TA_YM", "NA")
+            
+            # 시간대 표기를 한글로 바꿔주는 헬퍼 함수 (여기 추가)
+            def format_time_idx_to_korean(idx):
+                try:
+                    if '~' in idx and '시' in idx:
+                        parts = idx.split('~')
+                        start = parts[0]
+                        end = parts[1].replace('시', '')
+                        if not start.endswith('시'):
+                            start += '시'
+                        return f"{start}부터 {end}시" # 예: "18~23시" -> "18시부터 23시"
+                    return idx
+                except Exception:
+                    return idx # 오류 시 원본 반환
 
+            # '데이터 분석 요약' 섹션에 맞게 포맷 변경 (## SHOP 제거, 불렛 포인트 사용)
             meta = [
-                f"[가게] {shop_name} | 업종: {shop_cat}",
-                f"[주소] {shop_addr}",
-                f"[인근 지하철역] {shop_station}",
-                f"[기준월] {shop_month}",
+                f"* **가맹점 ID:** {store_id}", # store_id 추가
+                f"* **업종:** {shop_cat} (가게명: {shop_name})",
+                f"* **위치:** {shop_addr}",
+                f"* **인근 지하철역:** {shop_station}",
+                f"* **기준월:** {shop_month}",
             ]
-            lines.append("## SHOP\n" + "\n".join(meta))
+            lines.append("\n".join(meta))
 
             # 성/연령
             ga_row = gender_age.iloc[0]
@@ -1315,34 +1349,39 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
             ga_female = ga_row.get("여성")
             ga_lines = []
             if ga_total is not None:
-                ga_lines.append(f"일 평균 유동인구 {fmt(ga_total,0)}명")
-            if ga_male is not None and ga_female is not None:
-                ga_lines.append(f"남 {fmt(ga_male,0)}명 / 여 {fmt(ga_female,0)}명")
-            lines.append("\n## GENDER_AGE\n" + (" / ".join(ga_lines) if ga_lines else "정보 없음"))
-
-            # 요일
-            if "월" in dayofweek.columns:
-                pop_row = dayofweek[dayofweek["구분"] == "인구"].iloc[0]
-                top2 = pop_row[["월", "화", "수", "목", "금", "토", "일"]].sort_values(ascending=False)[:2]
-                top_lines = [f"{idx}: {fmt(val,0)}명" for idx, val in top2.items()]
-                lines.append("\n## DAYOFWEEK\n상위 요일 TOP2 → " + " / ".join(top_lines))
-            else:
-                lines.append("\n## DAYOFWEEK\n정보 없음")
+                ga_lines.append(f"* **일 평균 유동인구:** {fmt(ga_total,0)}명 (남성 {fmt(ga_male,0)}명, 여성 {fmt(ga_female,0)}명)")
+            lines.append("\n".join(ga_lines) if ga_lines else "")
 
             # 평/주말
             if "주중" in weekday_weekend.columns:
                 row = weekday_weekend[weekday_weekend["구분"] == "인구"].iloc[0]
-                wk = f"평일: {fmt(row['주중'], 0)}명/일"
-                we = f"주말: {fmt(row['주말'], 0)}명/일"
-                lines.append("\n## WEEKDAY_WEEKEND\n" + wk + " / " + we)
+                wk_val = float(row['주중'])
+                we_val = float(row['주말'])
+                wk = fmt(wk_val, 0)
+                we = fmt(we_val, 0)
+                
+                compare_text = "많음" if wk_val > we_val else "적음"
+                if wk_val == we_val: compare_text = "비슷함"
+                
+                lines.append(f"* **평일/주말 유동인구:** 평일 {wk}명/일, 주말 {we}명/일 (평일이 주말보다 {compare_text})")
             else:
-                lines.append("\n## WEEKDAY_WEEKEND\n정보 없음")
+                lines.append("* **평일/주말 유동인구:** 정보 없음")
 
             # 시간대
             row = timeband[timeband["구분"] == "인구"].iloc[0]
-            top3 = row[["05~09시", "09~12시", "12~14시", "14~18시", "18~23시", "23~05시"]].sort_values(ascending=False)[:3]
-            time_lines = [f"{idx}: {fmt(val,0)}명" for idx, val in top3.items()]
-            lines.append("\n## TIMEBAND\n시간대 TOP3 → " + " / ".join(time_lines))
+            # [수정] .astype(float) 추가
+            top3_series = row[["05~09시", "09~12시", "12~14시", "14~18시", "18~23시", "23~05시"]].astype(float).sort_values(ascending=False)[:3]
+            # 헬퍼 함수 적용 및 포맷 변경
+            time_lines = [f"{format_time_idx_to_korean(idx)}({fmt(val,0)}명)" for idx, val in top3_series.items()]
+            lines.append(f"* **주요 유동 시간대:** {', '.join(time_lines)}")
+            
+            # 요일 (참고용으로 추가)
+            if "월" in dayofweek.columns:
+                pop_row = dayofweek[dayofweek["구분"] == "인구"].iloc[0]
+                # [수정] .astype(float) 추가
+                top2 = pop_row[["월", "화", "수", "목", "금", "토", "일"]].astype(float).sort_values(ascending=False)[:2]
+                top_lines = [f"{idx}요일({fmt(val,0)}명)" for idx, val in top2.items()]
+                lines.append(f"* **주요 유동 요일:** {', '.join(top_lines)}")
 
             return "\n".join(lines)
 
@@ -1353,12 +1392,45 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
 
         # 프롬프트 구성
         SYSTEM_PROMPT = """
-너는 동네 상권 마케팅 전략가다.
-반드시 제공된 DATA_BLOCK만 근거로 실행 가능한 전략을 제시한다.
-답변은 다음 우선순위를 반드시 지켜라:
-1) 근처 직장인구에 대한 분석, 주말과 평일 직장인구 비교 등 여러 분석 후 한 문장으로 요약해줘
-2) 직장인 방문 비율이 높은 업종 특성상 회전률이 핵심 KPI임을 반영하여, 점심시간 회전율을 높이기 위한 전략을 제시할 것
-""".strip()
+너는 '백반/가정식' 업종 전문 외식 컨설턴트다.
+너의 임무는 사장님에게 [DATA_BLOCK]을 근거로 점심시간 '회전율'을 극대화할 구체적이고 독창적인 액션 플랜을 제시하는 것이다.
+추상적인 조언('열심히 하세요', '홍보하세요')은 절대 금지. [DATA_BLOCK]의 숫자를 직접 언급하며 데이터에 기반한 전략만 제시하라.
+
+[DATA_BLOCK]
+{data_block}
+
+[OUTPUT INSTRUCTION]
+아래 1번, 2번 항목을 반드시 포함하여 리포트를 완성하라.
+
+---
+**1) 점심시간 직장인구 특성 요약 (심층 분석)**
+([DATA_BLOCK]의 데이터를 심층적으로 분석하라.)
+
+* **평일 vs 주말 분석:** 평일 유동인구(예: {wk}명)와 주말 유동인구(예: {we}명)를 **숫자로 직접 비교**하라. 이 차이가 '직장인 상권'이라는 가게 특성과 맞는지, 혹은 주말에 다른 기회가 있는지 분석하라.
+* **시간대별 심층 분석:** 점심 피크 시간대(예: 09시~12시 또는 12시~14시)의 유동인구를 **숫자로 언급**하며, 저녁 등 다른 피크 시간대(예: 18시~23시)와 **숫자로 비교**하라. 점심 유동인구가 상대적으로 적다면(혹은 많다면) 이것이 사장님에게 어떤 의미(위기/기회)인지 해석하라.
+* **고객 성별 분석:** 남성(예: {male}명)과 여성(예: {female}명) 비율을 **숫자로 비교**하라. 이 성비가 백반/가정식 업종의 주 타겟(예: 빠른 한 끼를 원하는 남성 직장인)과 일치하는지, 이들이 무엇을 선호할지 **데이터에 근거하여 추론**하라.
+* **종합 결론:** 위 3가지 분석을 토대로, 사장님이 인지해야 할 '우리 가게 점심 고객'의 핵심 프로필을 1-2문장으로 최종 정의하라.
+
+---
+**2) 점심 피크타임 회전율 극대화 전략 (데이터 기반 제안)**
+(백반집의 핵심 KPI는 '회전율'임을 명심하고, 아래 4가지 카테고리에 맞춰 **[DATA_BLOCK]의 데이터를 근거로** 구체적인 전략을 제안하라. 절대로 정해진 답변을 하지 말고 데이터에 맞춰 창의적으로 제안하라.)
+
+**1. 메뉴 전략 (Menu Simplification)**
+* **전략:** [DATA_BLOCK]의 **고객 특성(예: 남/여 비율, 평일/주말 차이)**을 근거로, 가장 효과적인 점심 메뉴 구성을 제안하라. (예: 단일 특선 메뉴, 2-3가지 선택 메뉴 등)
+* **근거:** 왜 이 메뉴 구성이 [DATA_BLOCK]의 고객(예: **남성 {male}명**으로 여성이 {female}명보다 많아... / **평일 {wk}명**으로 주말보다 적어...)에게 매력적이며 회전율을 높이는지 **숫자를 들어** 설명하라.
+
+**2. 주문/결제 시스템 (Ordering/Payment Flow)**
+* **전략:** [DATA_BLOCK]의 **피크 시간대(예: '18시부터 23시({top1_pop}명)')**의 혼잡도를 점심시간과 비교하여, 점심시간에 적용할 가장 효율적인 주문/결제 방식을 제안하라.
+* **근거:** 이 방식이 어떻게 주문 병목현상을 해결하고, 직원이 **{shop_cat}** 업종의 핵심인 테이블 정리/반찬 리필에 집중하게 만드는지 설명하라.
+
+**3. 좌석 배치 및 동선 (Seating & Flow)**
+* **전략:** [DATA_BLOCK]의 **고객 성비(남성 {male}명 vs 여성 {female}명)**와 **상권(예: {shop_station} 인근)** 특성을 고려할 때, 1인/2인/4인석의 이상적인 비율을 제안하라. (예: 1-2인석 비중 확대, 바(Bar) 좌석 도입 등)
+* **근거:** 이 좌석 배치가 어떻게 1인 고객(혹은 2인 고객)의 빠른 식사를 유도하고, 전체적인 테이블 회전 속도를 높이는지 설명하라.
+
+**4. 회전율 촉진 프로모션 (Turnover Promotion)**
+* **전략:** [DATA_BLOCK]의 **데이터(예: 점심 유동인구가 {lunch_pop}명으로 저녁보다 적음 / 평일이 주말보다 적음)**를 활용하여, 고객의 자발적인 빠른 식사를 유도하거나 혹은 점심시간대 방문을 유도할 창의적인 프로모션 1가지를 제안하라.
+* **근거:** 이 프로모션이 어떻게 고객 경험을 해치지 않으면서(오히려 만족도를 높이면서) 평균 식사 시간을 단축시키거나, 혹은 가장 한가한 시간대의 매출을 보완할 수 있는지 **데이터에 기반하여** 설명하라.
+"""
 
         QUESTION = (
             "우리 가게는 직장인 고객이 주요 타겟이며, 점심시간에 해당하는 유동인구와 직장인구의 분석을 상세히 설명해줘.\n"
@@ -1366,15 +1438,48 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
             "2) 점심 피크타임에 회전율을 높이기 위한 전략을 제시해줘"
         )
 
-        def build_prompt(question: str, data_block: str) -> str:
-            return f"SYSTEM:\n{SYSTEM_PROMPT}\n\n[질문]\n{question}\n\n[DATA_BLOCK]\n{data_block}"
+        def build_prompt(question: str, data_block: str, shop_row, gender_age, weekday_weekend, timeband) -> str:
+            # 프롬프트에 동적으로 데이터를 주입하기 위해 변수 추가
+            
+            # 데이터 추출 (데이터프레임에서 직접)
+            ga_row = gender_age.iloc[0]
+            ww_row = weekday_weekend[weekday_weekend["구분"] == "인구"].iloc[0]
+            tb_row = timeband[timeband["구분"] == "인구"].iloc[0]
+            shop_dict = shop_row.iloc[0].to_dict()
+
+            # [*** 여기를 수정 ***]
+            # 'top1_pop' 계산 버그 수정
+            time_cols = ["05~09시", "09~12시", "12~14시", "14~18시", "18~23시", "23~05시"]
+            # tb_row[time_cols]로 숫자 컬럼만 선택 -> astype(float)로 변환 -> 정렬 -> 첫번째 값(iloc[0]) 추출
+            top1_val = tb_row[time_cols].astype(float).sort_values(ascending=False).iloc[0]
+
+            # 프롬프트 포맷팅에 사용할 딕셔너리 생성
+            format_data = {
+                "data_block": data_block,
+                "wk": fmt(ww_row.get('주중', 0), 0),
+                "we": fmt(ww_row.get('주말', 0), 0),
+                "male": fmt(ga_row.get('남성', 0), 0),
+                "female": fmt(ga_row.get('여성', 0), 0),
+                "top1_pop": fmt(top1_val, 0), # 수정된 top1_val 사용
+                "lunch_pop": fmt(pd.to_numeric(tb_row.get('09~12시', 0)) + pd.to_numeric(tb_row.get('12~14시', 0)), 0), # 09-14시 인구 합산 및 숫자 변환
+                "shop_cat": shop_dict.get("업종_정규화1", "요식업"),
+                "shop_station": shop_dict.get("HPSN_MCT_ZCD_NM", "현 상권")
+            }
+            
+            # .format()을 사용하여 SYSTEM_PROMPT에 데이터 주입
+            return SYSTEM_PROMPT.format(**format_data)
 
         # 데이터 블록 생성
         monthly = pd.DataFrame()  # 사용 안함
         data_block = make_data_block(monthly, df_gender_age, df_weekday_weekend, df_dayofweek, df_timeband, shop_row)
-        prompt = build_prompt(QUESTION, data_block)
         
-        # 최종 통합 리포트 생성
+        # 프롬프트 빌드 (더 많은 인자 전달)
+        prompt = build_prompt(QUESTION, data_block, shop_row, df_gender_age, df_weekday_weekend, df_timeband)
+        
+        # LLM 직접 호출
+        llm_response = call_gemini_llm(prompt)
+        
+        # 최종 리포트 구성 변경
         final_report = f"""
 ======================================================================
 🍽️ 점심시간 회전율 극대화 전략 - '{store_id}' 가맹점 분석 리포트
@@ -1382,7 +1487,13 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
 
 {basic_info_content}
 
-{prompt}
+---
+## 📊 유동인구 데이터 분석
+{data_block}
+
+---
+## 🤖 AI 컨설턴트 상세 전략 제안
+{llm_response}
 """
         # 2. 통합된 리포트 하나만 반환
         return final_report
