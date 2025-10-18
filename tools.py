@@ -187,38 +187,44 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
             return basic_info_content + f"\n🚨 분석 실패: '{store_id}' 가맹점은 '카페' 업종이 아닙니다."
 
         # 1단계: 데이터 분석 엔진
-        # [수정] 동적 고객 분석 로직
         persona_columns = list(PERSONA_MAP.keys())
 
-        # 전체 데이터에서 해당 가맹점 & '카페' 업종 데이터 필터링
         store_df = df_all_join[(df_all_join['ENCODED_MCT'] == store_id) & (df_all_join['업종_정규화2_대분류'] == '카페')].copy()
 
-        # 해당 가맹점의 기간별 고객 비중 데이터에서 평균 계산
         analysis_df = store_df[persona_columns]
-        # analysis_df.replace(-999999.9, np.nan, inplace=True) # 원본 데이터 로딩 시 이미 처리됨
         store_persona_data = analysis_df.mean()
         
+        store_persona_data = store_persona_data.dropna()
+        if store_persona_data.empty:
+             return f"분석 실패: '{store_id}' 가맹점의 유효한 고객 비중 데이터를 찾을 수 없습니다."
+
         max_value = store_persona_data.max()
+        if pd.isna(max_value):
+             return f"분석 실패: '{store_id}' 가맹점의 최대 고객 비중 값을 계산할 수 없습니다."
         threshold = max_value - 5.0
-        
+
         top_segments = store_persona_data[store_persona_data >= threshold]
         
-        # 결과가 2개를 초과할 경우, 가장 높은 상위 2개만 선택
         if len(top_segments) > 2:
             top_segments = top_segments.sort_values(ascending=False).head(2)
             
         if top_segments.empty:
-            return f"분석 실패: '{store_id}' 가맹점의 유효한 주요 고객층을 찾을 수 없습니다."
-        
-        main_personas_info = [PERSONA_MAP[seg] for seg in top_segments.index]
+             top_segments = store_persona_data.sort_values(ascending=False).head(2)
+             if top_segments.empty:
+                 return f"분석 실패: '{store_id}' 가맹점의 유효한 주요 고객층을 찾을 수 없습니다. (모든 고객 비중 데이터가 유효하지 않거나 0에 가까울 수 있습니다.)"
+
+        # 데이터 근거 추출 1: 핵심 고객 세그먼트 컬럼명 및 페르소나 이름
+        top_segment_cols = top_segments.index.tolist()
+        main_personas_info = [PERSONA_MAP[seg] for seg in top_segment_cols]
         main_personas_str = ", ".join([f"{p['name']}({p['desc']})" for p in main_personas_info])
+        # 컬럼명과 페르소나 이름을 매칭하여 문자열 생성
+        persona_col_mapping_str = ", ".join([f"{col} -> {PERSONA_MAP[col]['name']}" for col in top_segment_cols])
         
-        # [추가] 주요 고객 페르소나 특징 설명 생성
         main_personas_details_list = []
         for p in main_personas_info:
             detail = f"  - **{p['name']} ({p['desc']})**: {p['features']}"
             main_personas_details_list.append(detail)
-        main_personas_details_str = "\n".join(main_personas_details_list)
+        main_personas_details_str = "\n".join(main_personas_details_list) # LLM 프롬프트용 상세 설명
         
         # 핵심 성공 전략 분석
         store_data = df_all_join[df_all_join['ENCODED_MCT'] == store_id]
@@ -235,32 +241,24 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
         if dna_row.empty:
             return f"분석 실패: '{store_commercial_area}' 상권의 '카페' 업종 성공 DNA를 찾을 수 없습니다."
         
-        core_strategy = dna_row['핵심경영전략'].iloc[0]
+        # 데이터 근거 추출 2: 핵심 성공 변수 컬럼명 및 전략 내용
+        key_factor_col = dna_row['핵심성공변수(DNA)'].iloc[0] # 컬럼명 저장
+        core_strategy = dna_row['핵심경영전략'].iloc[0] # 전략 내용 저장
 
-        # 2단계: LLM 호출을 위한 프롬프트 생성
+        # 2단계: LLM 호출을 위한 프롬프트 생성 (이 부분은 이전과 동일)
         prompt_for_gemini = f"""
 # MISSION
-너는 **'고객 심리 분석가'이자 '전략 컨설턴트'**의 역량을 겸비한 'AI 비밀상담사'야. 너의 최우선 임무는 **사장님 가게의 핵심 고객(WHO)을 완벽하게 이해하고, 그들의 마음을 사로잡는 것을 모든 전략의 출발점이자 최종 목적지**로 삼는 것이다. 가게의 성공 전략(WHAT)은 고객의 마음을 얻기 위한 '가장 효과적이고 차별화된 방법'을 결정하는 데 사용된다.
+너는 **'고객 심리 분석가'이자 '실행 중심 전략 컨설턴트'**인 'AI 비밀상담사'다.
+너의 임무는 사장님 가게의 **핵심 고객(WHO) 데이터**와 **검증된 성공 전략(WHAT) 데이터**를 분석하여, 사장님이 **'그래서 당장 뭘 해야 하는지'** 명확히 알 수 있는 **구체적인 마케팅 액션 플랜**을 제시하는 것이다.
 
 ---
 
 # DATA INPUT (너가 분석할 핵심 데이터)
-1. **[WHO] 우리 가게 핵심 고객 페르소나 (가장 중요한 기준점):**
-{main_personas_details_list}
+1. **[WHO] 우리 가게 핵심 고객 페르소나:**
+{main_personas_details_str}
 
-2. **[WHAT] 우리 가게의 시장 성공 전략 (고객을 공략할 우리만의 무기):**
+2. **[WHAT] 우리 가게의 시장 성공 전략:**
 - '{core_strategy}'
-
----
-
-# CORE TASK: The Art of Fusion (WHO-First 접근법)
-
-너는 결과물을 만들기 전에, 아래의 사고 과정을 반드시 거쳐야 한다. 이것이 모든 제안의 논리적 기반이다.
-
-**[사고 과정: 과녁과 화살]**
-1.  **과녁 설정 (Target):** 고객(WHO)의 마음을 '과녁'으로 설정한다. 그들의 가장 깊은 욕망, 자주 느끼는 즐거움이나 불편함이 바로 과녁의 '정중앙(Bullseye)'이다.
-2.  **특별한 화살 선택 (Arrow):** 가게의 성공 전략(WHAT)을 이 과녁의 정중앙을 꿰뚫기 위한 '가장 특별하고 날카로운 화살'로 선택한다.
-3.  **필승 각도 발견:** 최종적으로 너가 제안할 모든 마케팅 아이디어는, **"어떤 '특별한 화살(WHAT)'을 사용해서 '고객(WHO)이라는 과녁'의 정중앙을 가장 정확하게 맞출 것인가?"**에 대한 대답이 되어야 한다.
 
 ---
 
@@ -268,7 +266,7 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 
 ## 1. 전체 톤앤매너
 - **고객 중심의 조언가:** 모든 설명과 제안의 주어를 '고객'으로 삼아, 사장님이 고객의 입장에서 생각하도록 자연스럽게 유도해줘.
-- **논리적 스토리텔러:** '고객은 ~을 원하기 때문에(WHO) → 우리 가게는 ~방식으로(WHAT) → 이렇게 다가가야 합니다' 라는 명확한 논리적 흐름으로 스토리를 전개해줘.
+- **논리적 스토리텔러:** '고객은 ~을 원하기 때문에(WHO 분석) → 우리 가게는 ~방식으로 성공할 수 있는데(WHAT 분석) → 따라서 이렇게 공략해야 합니다(핵심 방향 및 액션 플랜)' 라는 명확한 논리적 흐름으로 스토리를 전개해줘.
 
 ## 2. 최종 결과물 형식 (이 구조를 완벽하게 따라줘)
 
@@ -276,53 +274,68 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 
 ---
 
-**1. 우리 가게의 심장을 뛰게 할 바로 그 '고객'입니다! (고객 페르소나 심층 분석)**
-(DATA의 [WHO]를 바탕으로, 이 고객들이 '왜' 우리 카페를 찾는지, 그들의 일상과 욕망을 깊이 있게 파고들어 생생하게 묘사해줘.)
-
-**2. 이 고객들을 사로잡을 우리 가게만의 '비밀 무기'입니다! (핵심 성공 전략)**
-(DATA의 [WHAT]을 바탕으로, 이 전략이 왜 (1)번 고객들의 마음을 얻는 데 가장 효과적인 '무기'가 될 수 있는지 그 이유를 명확하게 설명해줘.)
+**1. 우리 가게의 핵심 주요 고객층 정보 (WHO: 고객 페르소나 심층 분석)**
+(DATA의 **[WHO]**를 바탕으로, 이 고객들이 '왜' 우리 카페를 찾는지, 그들의 **일상, 가치관, 소비 패턴, 욕망(Needs/Wants)** 등을 깊이 있게 파고들어 사장님이 고객을 **마치 옆에서 보는 것처럼** 생생하게 이해할 수 있도록 상세히 묘사해줘. 단순히 특징 나열이 아니라, 스토리가 느껴지도록 설명해야 한다.)
 
 ---
 
-**(두 데이터를 융합하는 브릿지 역할의 파트)**
-**3. 고객의 마음을 향한 '필승의 각도'를 찾았습니다!**
-(위 '과녁과 화살' 사고 과정의 결과를 여기서 공개해줘. **"(1)번 고객의 마음(과녁)을 사로잡기 위해, (2)번 전략(화살)을 활용하는 것이 왜 최적의 조합인지"**를 알기 쉽게 설명해줘. 이것이 앞으로 이어질 모든 마케팅 제안의 핵심 논리가 될 거야.)
+**2. 우리 가게에 대입할 핵심 성공 전략 (WHAT: 핵심 성공 전략 심층 분석)**
+(DATA의 **[WHAT]** 전략을 설명하되, 이 전략이 **왜 (1)번 고객들의 마음을 얻는 데 가장 효과적인 '무기'가 될 수 있는지** 그 이유를 명확하고 설득력 있게 설명해줘. 이 전략의 본질과 기대 효과를 사장님이 정확히 이해하도록 돕는 것이 목표다.)
 
 ---
 
-**4. '필승의 각도'로 고객의 마음에 다가갈 실전 전략입니다!**
-(이제 앞서 정의한 '필승의 각도'를 바탕으로, 철저히 고객 중심적인 마케팅 전략을 제안 시작)
+**3. 최적화된 결론 도출 (WHO + WHAT 연결 및 핵심 마케팅 방향)**
+(이제 (1)번의 고객 분석과 (2)번의 전략 분석을 **논리적으로 연결**해야 한다. **"(1)번 고객의 어떤 구체적인 심리/욕구** 때문에, **(2)번 전략을 활용하는 것이 왜 우리 가게에게 최적의 선택인지"** 명확하게 설명해줘. 이 연결고리를 바탕으로, 우리 가게가 앞으로 나아가야 할 **가장 중요한 마케팅 방향**을 한 문장으로 명확하게 정의한다.)
+    * 예시) "SNS 공유를 즐기고 특별한 경험을 중시하는 1020 여성 고객의 특성을 고려할 때, '기존 고객 충성도 강화 및 관계 심화' 전략은 이들에게 '나만 아는 특별한 공간'이라는 인식을 심어주고 자발적인 바이럴을 유도하는 최적의 경로입니다. 따라서 우리 가게의 핵심 마케팅 방향은 **'인스타그램 중심의 참여형 콘텐츠를 통해 단골 고객과의 유대감을 강화하는 것'** 입니다."
 
-**📈 추천 마케팅 채널**
-(고객(WHO)이 가장 많은 시간을 보내고, 가장 신뢰하는 채널을 제안하는 것이 최우선 기준)
+---
+
+**4. 사장님 맞춤형 실전 마케팅 액션 플랜**
+(이제 앞서 정의한 **(3)번 핵심 마케팅 방향**에 따라, 사장님이 바로 실행할 수 있는 구체적인 액션 플랜을 제시한다.)
+
+**📈 최적 마케팅 채널 추천**
+(타겟 고객 **[WHO]**가 가장 활발하게 이용하고, **[WHAT]** 전략을 펼치기 좋은 채널 1~2개를 선정한다.)
 
 * **[채널 이름]:**
-    * **근거:**
-        1. **(고객 관점):** 이 채널이 왜 **(1)번 고객**의 라이프스타일과 정보 소비 방식에 완벽하게 부합하는지를 먼저 설명.
-        2. **(전략 관점):** 그 다음, **(2)번 전략**을 활용했을 때 이 채널에서 어떤 차별화된 매력을 보여줄 수 있는지를 덧붙여 설명.
+    * **선정 이유 (Why):**
+        1. **(고객 접점):** 왜 이 채널이 **(1)번 고객**의 정보 소비 패턴 및 라이프스타일에 가장 적합한가? (**[WHO] 데이터** 언급 필수)
+        2. **(전략 실행):** 어떻게 이 채널에서 **(2)번 전략**을 가장 효과적으로 구현하여 고객의 마음을 사로잡을 수 있는가? (**[WHAT] 데이터** 언급 필수)
 
-**💡 추천 홍보 방안**
-(모든 아이디어는 '고객이 무엇을 경험하고 싶을까?'라는 질문에서 출발해야 함)
+**💡 즉시 실행 가능한 홍보 방안 (1~2가지)**
+(사장님이 **'내일부터 당장'** 실행할 수 있는 **구체적이고 창의적인 아이디어**를 제안한다. 모든 아이디어는 (3)번 핵심 방향과 일치해야 한다.)
 
-**[번호]. [고객의 욕구를 자극하는 창의적인 아이디어 제목]**
-* **무엇을 (What):** (이 아이디어를 통해 고객이 어떤 '특별한 경험과 감정'을 얻게 될지 한 문장으로 요약)
-* **어떻게 (How):** (사장님이 바로 실행할 수 있는 구체적인 방법들을 고객의 입장에서 매력적으로 느낄만한 예시와 함께 상세하게 제시)
-* **근거 (Why):** (가장 중요! 아래 두 단계의 논리로 증명)
-    1.  **[1순위-고객 만족]:** 먼저, 이 아이디어가 **(1)번 고객**의 어떤 욕구와 심리를 정확히 충족시켜 **'가고 싶다', '하고 싶다'**는 마음을 불러일으키는지 증명.
-    2.  **[2순위-전략 융합]:** 그 다음, 여기에 **(2)번 전략**을 어떻게 녹여내어, 이 경험을 **다른 가게에서는 할 수 없는 우리 가게만의 특별한 경험**으로 만들 수 있는지 증명.
+**[아이디어 명칭]:** (예: '#카페로그 챌린지' 인스타그램 이벤트)
+* **무엇을 (What):** (이 아이디어를 통해 **(1)번 고객**에게 어떤 **'구체적인 가치나 즐거움'**을 제공할 것인가?)
+* **어떻게 (How):** (사장님이 **'바로 따라 할 수 있도록'** 실행 방법, 예상 비용, 준비물, 기간 등을 **단계별로 매우 상세하게** 설명한다.)
+    * 예시) 1단계: 포토존 만들기 (비용: 5만원 이하, 소품: 전신 거울, 감성 조명, 작은 식물), 2단계: 인스타그램 공식 계정에 이벤트 공지 (기간: 4주, 필수 해시태그: #가게이름 #챌린지명 #단골인증), 3단계: 매주 금요일 우수작 1명 선정 및 DM 발표 (상품: 시그니처 디저트 + 음료 1잔 무료 쿠폰), 4단계: 선정작 리그램 및 참여자 감사 메시지 전달
+* **기대 효과 (Why this works):**
+    1. **(고객 반응):** 이 아이디어가 왜 **(1)번 고객**의 **[WHO] 데이터**에 나타난 심리/욕구(예: SNS 공유 통한 정체성 형성, 가심비 추구)를 정확히 충족시켜 **'참여하고 싶다', '자랑하고 싶다'**는 마음을 유발하는가?
+    2. **(전략 달성):** 이 아이디어가 어떻게 **(2)번 전략 ([WHAT] 데이터)** (예: 기존 고객 충성도 강화 및 관계 심화) 달성에 **직접적으로 기여**하며, 최종적으로 재방문율과 매출 증대에 어떤 긍정적 영향을 미칠 것으로 예상되는가?
 
 ---
 
-**(사장님께 고객 중심적 사고의 중요성을 다시 한번 강조하며, 진심 어린 응원의 메시지로 마무리)**
+**(사장님께 데이터 기반 마케팅의 중요성을 강조하며, 실행을 독려하는 진심 어린 메시지로 마무리)**
+"""
+        
+        # [*** 여기가 수정된 부분 ***]
+        # LLM 직접 호출 추가 및 final_report 구조 변경
+
+        # LLM 호출
+        llm_response = call_gemini_llm(prompt_for_gemini)
+
+        # 데이터 근거 요약 섹션 생성
+        data_summary_section = f"""
+---
+## 📊 AI 분석 핵심 데이터 근거
+
+* **핵심 고객층 (고객 데이터 -> 페르소나):** {persona_col_mapping_str}
+* **핵심 성공 변수 (데이터):** {key_factor_col}
+* **적용될 핵심 성공 전략:** '{core_strategy}' (상권: {store_commercial_area})
+
+---
 """
 
-
-        # [수정] 최종 리포트 양식 변경
-        # LangChain Agent가 LLM의 응답을 최종적으로 사용자에게 보여주는 부분이므로,
-        # 여기서는 데이터 분석 결과만 명확히 제시하고 LLM에게 보낼 프롬프트를 그대로 전달하여
-        # Agent가 LLM을 호출하고 그 응답을 자연스럽게 이어붙이도록 합니다.
-
-        # 최종 통합 리포트 생성
+        # 최종 통합 리포트 생성 (LLM 응답을 포함하도록 수정)
         final_report = f"""
 ======================================================================
       🤖 AI 비밀상담사 - '{store_id}' 가맹점 맞춤 전략 리포트
@@ -330,18 +343,10 @@ def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna:
 
 {basic_info_content}
 
-1. 우리 가게 주요 고객 특징 분석 (페르소나 기반)
+{data_summary_section} 
 
-{main_personas_details_str}
-
-2. 우리 가게 핵심 성공 전략
-
-우리 가게가 속한 '{store_commercial_area}' 상권의 카페 업종은 '{core_strategy}' 전략이 성공의 열쇠입니다.
-
-3. AI가 제안하는 맞춤 마케팅 전략
-
-(AI가 아래 프롬프트를 바탕으로 답변을 생성합니다.)
-{prompt_for_gemini}
+## 💡 AI 컨설턴트 상세 분석 및 전략 제안
+{llm_response}
 """
         # 2. 통합된 리포트 하나만 반환
         return final_report
@@ -581,196 +586,114 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
             return persona_explanation + strategy_explanation
 
         # STAGE 4: 페르소나 + 핵심성공전략 융합 마케팅 전략
+        # [*** 여기가 수정된 부분 ***]
         def get_stage4_integrated_strategy(persona, key_factor, key_strategy, analysis_results):
-            # 페르소나별 전략 템플릿
+            # 페르소나별 기본 전략 템플릿 (이 내용은 그대로 사용)
             persona_strategies = {
                 "첫인상만 좋은 신규 매장": f"""
-**🎯 '{persona}' 전용 고객 온보딩 전략**
-
 [데이터 기반 전략 근거]
-- 신규 고객 비율: {target_store.get('MCT_UE_CLN_NEW_RAT', 0):.1f}% (60% 초과)
-- 운영 기간: {translate_metric('tenure', target_store.get('MCT_OPE_MS_CN'))}
-- 문제점: 첫 방문은 많지만 재방문 전환율이 낮음
-
+- 신규 고객 비율: {target_store.get('MCT_UE_CLN_NEW_RAT', 0):.1f}% (60% 초과), 운영 기간: {translate_metric('tenure', target_store.get('MCT_OPE_MS_CN'))} -> 첫 방문은 많지만 재방문 전환율 낮음
 [구체적 실행 방안]
-1. **'첫 만남 각인' 시스템 구축**
-   - 첫 방문 고객 100% 대상: "다음 방문 시 대표메뉴 1개 무료" 쿠폰 증정
-   - 쿠폰 유효기간: 7일 (긴급성 조성)
-   - 쿠폰 사용률 추적: 목표 40% 이상
-
-2. **'단골 네비게이션' 프로그램**
-   - 2-3회차 방문 고객: "사장님 추천 숨겨진 메뉴 조합" 안내
-   - VIP 고객 전용 서비스: 메뉴판에 없는 특별 메뉴 제공
-   - 고객별 선호도 기록 시스템 구축
-
-3. **'재방문 동기 부여' 캠페인**
-   - 월간 "신규 고객 → 단골 고객" 전환 이벤트
-   - 연속 방문 고객 누적 혜택 시스템 (3회→5회→10회 방문 시 차등 혜택)
+1. '첫 만남 각인': 첫 방문 100% 대상 "다음 방문 시 대표메뉴 1개 무료" 쿠폰 증정 (유효기간 7일)
+2. '단골 네비게이션': 2-3회차 방문 고객 대상 "사장님 추천 숨겨진 메뉴 조합" 안내, VIP 전용 메뉴 제공
+3. '재방문 동기 부여': 월간 "단골 전환 이벤트", 연속 방문 누적 혜택 (3회→5회→10회 차등)
 """,
                 "재방문하기엔 부담스러운 가격": f"""
-**🎯 '{persona}' 전용 가격 가치 전략**
-
 [데이터 기반 전략 근거]
-- 객단가 수준: {translate_metric('level', target_store.get('RC_M1_AV_NP_AT'))} (최신월 기준)
-- 성공 그룹 대비 격차: {analysis_results['price_competitiveness']['gap']:.2f}점 (객단가 점수가 낮음)
-- 문제점: 가격 대비 가치 인식 부족으로 재방문 저조
-
+- 객단가 수준: {translate_metric('level', target_store.get('RC_M1_AV_NP_AT'))}, 성공 그룹 대비 격차: {analysis_results['price_competitiveness']['gap']:.2f}점 -> 가격 대비 가치 인식 부족
 [구체적 실행 방안]
-1. **'디코이 효과(Decoy Effect)' 메뉴 재구성**
-   - 가장 비싼 대표메뉴(Anchor) 옆에 "실속 메뉴" 배치
-   - 실속 메뉴: 양은 80%, 가격은 60%로 설정하여 가치 인식 극대화
-   - 메뉴판 레이아웃: 고가 메뉴 → 실속 메뉴 → 일반 메뉴 순서로 배치
-
-2. **'가치부가형 번들링' 시스템**
-   - 메인 메뉴 주문 시: 마진 높은 음료/사이드 무료 증정
-   - "오늘의 특별 조합" 메뉴: 개별 주문 대비 20% 할인
-   - 가치 인식 강화: "총 가치 OO원 → OO원" 표시
-
-3. **'가격 투명성' 마케팅**
-   - 재료비, 인건비 등 비용 구조 투명 공개
-   - "왜 이 가격인가?" 스토리텔링으로 가치 인식 개선
-   - 고객 리뷰에 가격 대비 만족도 강조
+1. '디코이 효과' 메뉴 재구성: 대표메뉴 옆 "실속 메뉴"(양 80%, 가격 60%) 배치 (메뉴판: 고가→실속→일반 순)
+2. '가치부가형 번들링': 메인 주문 시 마진 높은 음료/사이드 무료 증정, "오늘의 특별 조합" 20% 할인 ("총 가치 OO원 → OO원" 표시)
+3. '가격 투명성' 마케팅: 비용 구조 공개, "왜 이 가격인가?" 스토리텔링, 리뷰에 가성비 만족도 유도
 """,
                 "동네 주민을 사로잡지 못하는 매장": f"""
-**🎯 '{persona}' 전용 지역 커뮤니티 전략**
-
 [데이터 기반 전략 근거]
-- 거주 고객 비율: {analysis_results['audience_alignment'].get('target', 0):.1f}% (월 평균)
-- 성공 그룹 대비 격차: {analysis_results['audience_alignment']['gap']:.1f}%p (거주 고객 부족)
-- 문제점: 동네 주민 고객 확보 실패로 단골 고객 기반 약함
-
+- 거주 고객 비율: {analysis_results['audience_alignment'].get('target', 0):.1f}%, 성공 그룹 대비 격차: {analysis_results['audience_alignment']['gap']:.1f}%p -> 동네 주민 확보 실패, 단골 기반 약함
 [구체적 실행 방안]
-1. **'우리 동네 멤버십' 시스템**
-   - 주민 인증 방법: 주소지 증명서 또는 동네 상점 영수증 제시
-   - 주민 전용 혜택: 포인트 2배 적립, 월간 스페셜 메뉴 제공
-   - 주민 전용 이벤트: "동네 맛집 투어", "이웃과 함께하는 식사" 등
-
-2. **'로컬 인플루언서' 파트너십**
-   - 지역 맘카페 운영진 초청: 무료 시식 및 진정성 있는 후기 유도
-   - 소규모 맛집 블로거 협력: "숨겨진 동네 맛집" 콘텐츠 제작
-   - 지역 SNS 그룹 참여: 동네 소식 공유 및 자연스러운 홍보
-
-3. **'지역 사회 기여' 활동**
-   - 동네 행사 참여: 축제, 마을 잔치 등에서 부스 운영
-   - 지역 단체 후원: 소상공인회, 동네 모임 등과 협력
-   - 지역 취약계층 지원: 할인 혜택 제공으로 사회적 가치 창출
+1. '우리 동네 멤버십': 주민 인증 시 혜택(포인트 2배, 월간 스페셜 메뉴), 주민 전용 이벤트("동네 맛집 투어")
+2. '로컬 인플루언서' 파트너십: 지역 맘카페 운영진/맛집 블로거 초청 시식회, 지역 SNS 그룹 소통
+3. '지역 사회 기여': 동네 행사 참여, 지역 단체 후원, 지역 취약계층 할인
 """,
                 "배달 채널 부재": f"""
-**🎯 '{persona}' 전용 배달 채널 구축 전략**
-
 [데이터 기반 전략 근거]
-- 배달 매출 비중: {target_delivery_ratio_avg:.1f}% (월 평균, 배달 미운영)
-- 성공 그룹 대비 격차: {analysis_results['channel_expansion']['gap']:.1f}%p (배달 채널 부재)
-- 문제점: 온라인 고객 접점 부재로 현대 고객 소비 패턴 미충족
-
+- 배달 매출 비중: {target_delivery_ratio_avg:.1f}%, 성공 그룹 대비 격차: {analysis_results['channel_expansion']['gap']:.1f}%p -> 온라인 고객 접점 부재
 [구체적 실행 방안]
-1. **'배달앱 최적화' 전략**
-   - 주요 배달앱 등록: 배민, 요기요, 쿠팡이츠 등 3개 이상 플랫폼 활용
-   - 배달 전용 메뉴 구성: 포장 최적화된 메뉴, 배달 전용 사이즈 제공
-   - 배달 리뷰 관리: 4.5점 이상 유지, 고객 피드백 즉시 반영
-
-2. **'O2O 연계 프로모션' 시스템**
-   - 배달 주문 시: "매장 방문 시 사용 가능한 음료 쿠폰" 동봉
-   - 매장 방문 고객: "배달 주문 시 사용 가능한 할인 쿠폰" 제공
-   - 크로스 채널 데이터 분석: 배달→매장, 매장→배달 고객 전환율 추적
-
-3. **'배달 데이터 활용' 마케팅**
-   - 인기 배달 메뉴 분석: 오프라인 "타임 세일" 상품으로 기획
-   - 배달 주문 패턴 분석: 피크타임 예측 및 재고 관리 최적화
-   - 배달 고객 세분화: 지역별, 시간대별 맞춤 프로모션 실행
+1. '배달앱 최적화': 주요 배달앱 3개 이상 등록, 배달 전용 메뉴/사이즈 구성, 리뷰 4.5점 이상 관리
+2. 'O2O 연계 프로모션': 배달 주문 시 매장 쿠폰 동봉, 매장 방문 시 배달 쿠폰 제공
+3. '배달 데이터 활용': 인기 배달 메뉴 오프라인 타임 세일, 배달 패턴 분석 후 피크타임 예측/재고 관리
 """,
                 "총체적 마케팅 부재": f"""
-**🎯 '{persona}' 전용 D2C 채널 구축 전략**
-
 [데이터 기반 전략 근거]
-- 가격 경쟁력 격차: {analysis_results['price_competitiveness']['gap']:.2f}점
-- 거주 고객 격차: {analysis_results['audience_alignment']['gap']:.1f}%p  
-- 배달 채널 격차: {analysis_results['channel_expansion']['gap']:.1f}%p
-- 문제점: 전체적인 마케팅 전략과 고객 관리 시스템 부재
-
+- 가격 경쟁력({analysis_results['price_competitiveness']['gap']:.2f}점), 거주 고객({analysis_results['audience_alignment']['gap']:.1f}%p), 배달 채널({analysis_results['channel_expansion']['gap']:.1f}%p) 모두 부족 -> 마케팅/고객관리 시스템 부재
 [구체적 실행 방안]
-1. **'고객 자산화' 시스템 구축**
-   - 카카오톡 채널 개설: 테이블마다 "친구 추가 시 대표메뉴 1+1 쿠폰" 제공
-   - 고객 DB 구축: 방문 빈도, 선호 메뉴, 생일 등 개인화 정보 수집
-   - 고객 세분화: VIP, 일반, 신규 고객별 차별화된 서비스 제공
-
-2. **'자동화 CRM' 시나리오**
-   - 가입 1달 후: "감사 쿠폰" 자동 발송
-   - 생일 당일: "생일 축하 쿠폰" 자동 발송
-   - 2주 미방문: "한동안 뜸했네요 쿠폰" 자동 발송
-   - 계절별: "계절 메뉴 출시 알림" 및 "시즌 쿠폰" 제공
-
-3. **'통합 마케팅 플랫폼' 구축**
-   - 온라인/오프라인 통합 포인트 시스템
-   - 고객 여정 전체 추적: 인지→관심→방문→재방문→추천 단계별 관리
-   - 데이터 기반 개인화 마케팅: 고객별 맞춤 메뉴 추천, 프로모션 제공
+1. '고객 자산화': 카카오톡 채널 개설("친구 추가 시 1+1 쿠폰"), 고객 DB 구축(방문 빈도, 선호 메뉴 등) 및 세분화(VIP/일반/신규)
+2. '자동화 CRM': 가입 1달 후(감사 쿠폰), 생일 당일(생일 쿠폰), 2주 미방문(리마인드 쿠폰), 계절별(시즌 쿠폰/알림) 자동 발송
+3. '통합 마케팅 플랫폼': 온/오프라인 통합 포인트, 고객 여정(인지→관심→방문→재방문→추천) 추적, 데이터 기반 개인화 마케팅
 """
             }
             
-            # 선택된 페르소나의 전략 가져오기
-            selected_strategy = persona_strategies.get(persona, "")
+            selected_persona_strategy_details = persona_strategies.get(persona, "맞춤형 전략 수립이 필요합니다.")
             
-            return f"""
-**🚀 마케팅 전문가 데이터 기반 통합 전략 컨설팅**
+            # --- Stage 4 프롬프트 수정 ---
+            stage4_prompt = f"""
+너는 사장님의 실행을 돕는 **'AI 마케팅 액션 플래너'**다.
+앞서 분석된 Stage 1~3의 데이터를 바탕으로, 사장님이 **'그래서 당장 뭘 해야 하는지'** 명확히 알 수 있도록 구체적인 액션 플랜을 제시해야 한다.
+추상적인 조언 대신, **데이터에 근거한 실행 가능한 아이템**을 명확하게 제시하라.
 
-[전략 융합 근거 및 데이터 분석]
-'{persona}' 페르소나 진단 결과와 '{key_factor}' 핵심 성공 전략을 융합하여, 
-동일 업종/상권 성공 그룹의 검증된 데이터를 기반으로 사장님 가게만의 맞춤형 마케팅 전략을 제시합니다.
+**[Stage 1~3 분석 결과 요약]**
+* **진단된 문제 유형 (페르소나):** '{persona}'
+* **가장 시급한 개선 지표:** 가격 경쟁력({analysis_results['price_competitiveness']['gap']:.2f}점), 거주 고객({analysis_results['audience_alignment']['gap']:.1f}%p), 배달 채널({analysis_results['channel_expansion']['gap']:.1f}%p) 중 가장 격차가 큰 항목
+* **검증된 성공 공식 (핵심 전략):** '{key_strategy}' (핵심 성공 변수: '{key_factor}')
+* **현재 재방문율:** {target_revisit_rate:.2f}% (목표: 30% 이상)
 
-**📊 핵심 성과 지표 (KPI) 설정**
-- **현재 재방문율**: {target_revisit_rate:.2f}% → **목표 재방문율**: 30% 이상 (성공 그룹 기준)
-- **개선 필요 지표**: 가격경쟁력({analysis_results['price_competitiveness']['gap']:.2f}점), 거주고객({analysis_results['audience_alignment']['gap']:.1f}%p), 배달채널({analysis_results['channel_expansion']['gap']:.1f}%p)
-- **검증된 성공 공식**: '{key_strategy}' (동일 업종/상권 성공 그룹 데이터 분석 결과)
+**[OUTPUT INSTRUCTION]**
+아래 형식에 맞춰 **사장님 맞춤형 재방문율 개선 액션 플랜**을 구체적으로 작성하라.
 
-**💡 페르소나 맞춤형 즉시 실행 마케팅 전략**
+---
+**🎯 사장님 맞춤형 액션 플랜: '{persona}' 문제 해결 전략**
 
-{selected_strategy}
+(사장님 가게가 '{persona}' 유형으로 진단되었으므로, 이 문제를 해결하기 위한 **가장 효과적인 1~2가지 핵심 액션 아이템**을 아래와 같이 제안합니다. 이는 '{key_strategy}'라는 검증된 성공 공식을 적용한 것입니다.)
 
-**🎯 핵심 성공 전략 기반 차별화 전략**
+{selected_persona_strategy_details}
 
-[전략 융합 및 실행 방안]
-'{key_strategy}' 전략을 '{persona}' 페르소나 특성과 융합하여 다음과 같이 실행합니다:
+---
+**💡 추가 액션 아이템: 성공 그룹 따라잡기**
 
-1. **성공 그룹 벤치마킹 전략**
-   - 동일 업종/상권 성공 그룹의 공통 특징 분석 결과 활용
-   - 성공 그룹 대비 부족한 지표 집중 개선
-   - 검증된 성공 방정식의 단계별 적용
+(위 핵심 액션 외에도, Stage 2 분석 결과 성공 그룹 대비 격차가 있었던 지표를 개선하기 위한 **추가적인 액션 아이템 1~2가지**를 제안합니다.)
 
-2. **데이터 기반 전략 조정**
-   - 월간 성과 측정 및 전략 수정
-   - A/B 테스트를 통한 최적 전략 도출
-   - 고객 피드백 기반 서비스 개선
+* **[개선 필요 지표 1]** (예: 거주 고객 확보)
+    * **액션 아이템:** (예: '우리 동네 멤버십' 도입 - 주민 인증 시 포인트 2배 적립)
+    * **데이터 근거:** (예: 현재 거주 고객 비율이 성공 그룹보다 {analysis_results['audience_alignment']['gap']:.1f}%p 낮으므로, 지역 주민 대상 혜택 강화 필요)
 
-**📊 데이터 기반 성과 측정 및 최적화 시스템**
+* **[개선 필요 지표 2]** (예: 배달 채널 활성화)
+    * **액션 아이템:** (예: 주요 배달앱 2곳 이상 입점 및 배달 전용 '1인 세트 메뉴' 출시)
+    * **데이터 근거:** (예: 현재 배달 미운영/저조 ({analysis_results['channel_expansion']['gap']:.1f}%p 격차)하므로, 온라인 접점 확대 필요)
 
-1. **핵심 지표 모니터링**
-   - 재방문율: {target_revisit_rate:.2f}% → 목표 30% 이상 (월간 추적)
-   - 고객 세분화별 방문 패턴: 신규/기존/VIP 고객별 분석
-   - 마케팅 채널별 ROI: 배달/매장/온라인 채널별 수익성 분석
+---
+**📅 4주 실행 로드맵 & 예상 효과**
 
-2. **실시간 데이터 분석**
-   - 일일 매출, 고객수, 객단가 추적
-   - 고객 만족도 조사 (월 1회)
-   - 경쟁사 대비 포지셔닝 분석 (분기 1회)
+(사장님이 바로 실행하실 수 있도록, 위 액션 아이템들을 **4주간의 로드맵**으로 정리했습니다.)
 
-3. **전략 최적화 사이클**
-   - 1주차: 즉시 실행 전략 도입 및 초기 반응 측정
-   - 2-4주차: 데이터 분석 기반 전략 미세 조정
-   - 1-3개월: 성과 평가 및 중장기 전략 수립
+* **1주차:** [가장 먼저 해야 할 핵심 액션 1가지 구체적으로 명시] (예: '실속 메뉴' 개발 및 메뉴판 디자인 변경)
+* **2주차:** [그 다음 실행할 액션 1가지 구체적으로 명시] (예: 카카오톡 채널 개설 및 '친구 추가' 이벤트 시작)
+* **3-4주차:** [나머지 액션 실행 및 1-2주차 성과 측정 시작] (예: 배달앱 입점 신청 / 쿠폰 사용률, 채널 친구 수 등 데이터 확인)
 
-**🎯 예상 성과 및 ROI**
+* **예상 효과:** (위 로드맵을 꾸준히 실행하시면, 2-3개월 내 재방문율 {target_revisit_rate:.2f}% → **30% 달성** 및 **월 매출 20-30% 증가**를 기대할 수 있습니다. LTV 향상으로 장기적인 안정 매출 확보에도 기여할 것입니다.)
+"""
+            # 포맷팅된 프롬프트 문자열을 반환
+            return stage4_prompt
+            
+        # --- 최종 리포트 생성 로직 변경 ---
+        # 1. Stage 3 분석 결과 생성
+        stage3_analysis = get_stage3_analysis(persona, key_factor, key_strategy, analysis_results)
+        
+        # 2. Stage 4 프롬프트 생성 (LLM 호출은 아직 안 함)
+        stage4_prompt_for_llm = get_stage4_integrated_strategy(persona, key_factor, key_strategy, analysis_results)
 
-[데이터 기반 성과 예측]
-- 재방문율 개선: {target_revisit_rate:.2f}% → 30% 이상 (목표 달성 시 월 매출 20-30% 증가 예상)
-- 고객 생애가치(LTV) 향상: 단발성 고객 → 충성 고객 전환으로 장기 수익성 개선
-- 마케팅 효율성 증대: 데이터 기반 타겟팅으로 마케팅 비용 대비 효과 극대화
+        # 3. Stage 4 프롬프트를 LLM에 보내 최종 액션 플랜 생성
+        stage4_llm_response = call_gemini_llm(stage4_prompt_for_llm)
 
-[투자 대비 수익률]
-- 초기 투자: 시스템 구축 및 마케팅 비용
-- 예상 회수 기간: 2-3개월 (재방문율 30% 달성 기준)
-- 장기 수익: 충성 고객 기반 안정적 매출 증대"""
-
-        # 최종 통합 리포트 생성
+        # 4. 최종 리포트 조합
         final_report = f"""
 ======================================================================
 🩺 AI 하이브리드 전략 컨설팅 - '{store_id}' 가맹점 분석 리포트
@@ -809,10 +732,10 @@ def revisit_rate_analysis_tool(store_id: str, df_all_join: pd.DataFrame, df_prom
 📊 AI 종합 진단: 위 3가지 동인을 종합 분석한 결과, 사장님 가게의 현재 가장 시급한 개선 과제는 '{persona}' 유형에 해당합니다.
 
 ---------- [STAGE 3] 페르소나 & 핵심성공전략 상세 분석 ----------
-{get_stage3_analysis(persona, key_factor, key_strategy, analysis_results)}
+{stage3_analysis}
 
----------- [STAGE 4] 데이터 기반 통합 마케팅 전략 제안 ----------
-{get_stage4_integrated_strategy(persona, key_factor, key_strategy, analysis_results)}
+---------- [STAGE 4] AI 마케팅 액션 플랜 ----------
+{stage4_llm_response}
 
 ======================================================================
 """
@@ -1106,114 +1029,131 @@ def store_strength_weakness_tool(store_id: str, df_all_join: pd.DataFrame) -> st
 # =============================================================================
 
 @tool
-def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_gender_age: pd.DataFrame, df_weekday_weekend: pd.DataFrame, df_dayofweek: pd.DataFrame, df_timeband: pd.DataFrame) -> str:
+def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_gender_age: pd.DataFrame, df_weekday_weekend: pd.DataFrame, df_timeband: pd.DataFrame) -> str:
     """
-    지하철역 인근 가맹점의 유동인구 데이터를 심층 분석하여, 신규 방문객을 단골로 전환하기 위한 '재방문 유도 전략'을 전문적으로 제안하는 도구.
+    [특화 질문 4번 모델]
+    지하철역 인근 가맹점의 '선택영역' 유동인구 데이터(Long Format) 3종(성별연령, 요일(평일/주말), 시간대)을 심층 분석하여,
+    신규 방문객을 단골로 전환하기 위한 '재방문 유도 전략'을 전문적으로 제안하는 도구.
     '유동인구', '지하철역', '출퇴근', '재방문 유도' 관련 질문에 사용된다.
     
     Args:
         store_id: 분석할 가맹점 ID
-        df_all_join: 전체 JOIN 데이터
-        df_gender_age: 성별연령대별 유동인구 데이터
-        df_weekday_weekend: 요일별 유동인구 데이터
-        df_dayofweek: 요일별 유동인구 데이터
-        df_timeband: 시간대별 유동인구 데이터
+        df_all_join: 전체 JOIN 데이터 (가게 정보 조회용)
+        df_gender_age: 성별연령대별_유동인구_선택영역.csv (Long Format)
+        df_weekday_weekend: 요일별_유동인구_선택영역.csv (Long Format)
+        df_timeband: 시간대별_유동인구_선택영역.csv (Long Format)
     
     Returns:
-        LLM에게 전달할 완성된 프롬프트 문자열
+        LLM이 생성한 완성된 분석 리포트 문자열
     """
     try:
-        # 1. 공통 헬퍼 함수 호출 (반환 변수명 변경)
+        # 1. 공통 헬퍼 함수 호출 (기본정보 출력을 위해 basic_info_content 다시 사용)
         basic_info_content, latest_store_data = _get_store_basic_info(store_id, df_all_join)
         
         if latest_store_data is None:
             return basic_info_content # 오류 메시지는 그대로 반환
 
-        # 데이터 정규화 유틸 함수들
+        # --- 데이터 파싱 함수 (Long Format 전용) ---
+
+        # 데이터 포맷팅 유틸
         def fmt(x, digits=1):
             try:
                 return f"{float(x):,.{digits}f}"
             except Exception:
                 return str(x)
 
+        # 컬럼명 정규화
         def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
             df = df.copy()
             def norm(s):
                 return str(s).replace("\u3000", "").replace(" ", "").strip()
             df.columns = [norm(c) for c in df.columns]
             rename_map = {}
+            # Long Format 컬럼명 통일
             for c in df.columns:
-                if c in ["지표","항목","분류","구분값","구분*","구분_", "구분"]:
+                if c in ["지표","항목","분류","구분값","구분*","구분_"]:
                     rename_map[c] = "구분"
+                elif c in ["인구", "인구수", "유동인구"]:
+                    rename_map[c] = "인구(명)"
+                elif c == "요일":
+                    rename_map[c] = "요일"
+                elif c == "시간대":
+                    rename_map[c] = "시간대"
             if rename_map:
                 df = df.rename(columns=rename_map)
             return df
 
-        def pick_population_row(df: pd.DataFrame) -> pd.Series:
+        # Long Format CSV를 Dict로 변환하는 헬퍼
+        def get_long_data_dict(df, key_col_candidates, val_col_candidates):
             df = normalize_columns(df)
-            if "구분" in df.columns:
-                cand = df[df["구분"].astype(str).str.contains("인구")]
-                if len(cand):
-                    return cand.iloc[0]
-            return df.iloc[0]
+            key_col = next((c for c in df.columns if c in key_col_candidates), df.columns[0])
+            val_col = next((c for c in df.columns if c in val_col_candidates), df.columns[1])
+            # [수정] errors='coerce'를 추가하여 숫자가 아닌 값(예: '선택 영역')을 NaN으로 처리
+            return pd.to_numeric(df.set_index(key_col)[val_col], errors='coerce').dropna().to_dict()
 
-        # DATA_BLOCK 생성 함수
-        def make_data_block(monthly, gender_age, weekday_weekend, dayofweek, timeband, shop_row) -> str:
+        # 시간대 표기를 한글로
+        def format_time_idx_to_korean(idx):
+            try:
+                if '~' in idx and '시' in idx:
+                    parts = idx.split('~')
+                    start = parts[0]
+                    end = parts[1].replace('시', '')
+                    if not start.endswith('시'):
+                        start += '시'
+                    return f"{start}부터 {end}시"
+                return idx
+            except Exception:
+                return idx
+
+        # DATA_BLOCK 생성 함수 (Long Format 파싱하도록 전면 수정)
+        def make_data_block(gender_age_df, weekday_weekend_df, timeband_df, shop_row) -> str:
             lines = []
             shop = shop_row.iloc[0].to_dict() if len(shop_row) else {}
             shop_name = shop.get("MCT_NM", "가게명 미상")
             shop_addr = shop.get("MCT_BSE_AR", "주소 미상")
-            shop_station = shop.get("HPSN_MCT_ZCD_NM", "지하철역 미상")
+            # [*** 여기를 수정 ***] '지하철역' 대신 '상권' 컬럼을 사용
+            shop_commercial_area = shop.get("HPSN_MCT_BZN_CD_NM", "상권 미상")
             shop_cat = shop.get("업종_정규화1", shop.get("업종_정규화2_대분류", "업종 미상"))
-            shop_month = shop.get("TA_YM", "NA")
 
-            lines.append(f"## SHOP\n[가게] {shop_name} | 업종: {shop_cat}\n[주소] {shop_addr}\n[인근 지하철역] {shop_station}\n[기준월] {shop_month}")
-
-            # 성/연령
-            gender_age = normalize_columns(gender_age)
-            ga_row = gender_age.iloc[0]
-            ga_total = ga_row.get("일일")
-            ga_male = ga_row.get("남성")
-            ga_female = ga_row.get("여성")
-            ga_lines = []
-            if ga_total is not None:
-                ga_lines.append(f"일 평균 유동인구 {fmt(ga_total,0)}명")
-            if ga_male is not None and ga_female is not None:
-                ga_lines.append(f"남 {fmt(ga_male,0)}명 / 여 {fmt(ga_female,0)}명")
-            lines.append("\n## GENDER_AGE\n" + (" / ".join(ga_lines) if ga_lines else "정보 없음"))
-
-            # 요일
-            dayofweek = normalize_columns(dayofweek)
+            meta = [
+                f"* **가맹점 ID:** {store_id}",
+                f"* **업종:** {shop_cat} (가게명: {shop_name})",
+                f"* **위치:** {shop_addr}",
+                # [*** 여기를 수정 ***] '인근 지하철역' -> '상권'으로 텍스트 변경
+                f"* **상권:** {shop_commercial_area}",
+            ]
+            lines.append("\n".join(meta))
+            
             try:
-                row = pick_population_row(dayofweek)
-                dow_cols = [c for c in row.index if any(x in c for x in ["월","화","수","목","금","토","일"])]
-                s = row[dow_cols].astype(float).sort_values(ascending=False)[:2]
-                lines.append("\n## DAYOFWEEK\n상위 요일 TOP2 → " + " / ".join([f"{k}: {fmt(v,0)}명" for k,v in s.items()]))
-            except Exception:
-                lines.append("\n## DAYOFWEEK\n정보 없음")
-
-            # 평일/주말
-            weekday_weekend = normalize_columns(weekday_weekend)
+                ga_data = get_long_data_dict(gender_age_df, ['구분', '항목'], ['인구(명)'])
+                ga_male = ga_data.get("남성", 0)
+                ga_female = ga_data.get("여성", 0)
+                # '일일' 키가 없을 수 있으므로, 남+여 합계로 ga_total을 계산
+                ga_total = ga_male + ga_female 
+                lines.append(f"* **일 평균 유동인구:** {fmt(ga_total,0)}명 (남성 {fmt(ga_male,0)}명, 여성 {fmt(ga_female,0)}명)")
+            except Exception as e:
+                lines.append(f"* **성/연령 데이터:** (파싱 오류: {e})")
+            
+            # '요일' (df_dayofweek) 분석 로직 아예 삭제
+            
             try:
-                row = pick_population_row(weekday_weekend)
-                wk_key = "주중" if "주중" in weekday_weekend.columns else ("평일" if "평일" in weekday_weekend.columns else None)
-                we_key = "주말" if "주말" in weekday_weekend.columns else None
-                if wk_key and we_key:
-                    lines.append(f"\n## WEEKDAY_WEEKEND\n평일: {fmt(row[wk_key],0)}명/일 / 주말: {fmt(row[we_key],0)}명/일")
-                else:
-                    lines.append("\n## WEEKDAY_WEEKEND\n정보 없음")
-            except Exception:
-                lines.append("\n## WEEKDAY_WEEKEND\n정보 없음")
+                ww_data = get_long_data_dict(weekday_weekend_df, ['구분', '항목'], ['인구(명)'])
+                # '평일' 또는 '주중' 키를 모두 시도
+                wk_val = float(ww_data.get("평일", ww_data.get("주중", 0)))
+                we_val = float(ww_data.get("주말", 0))
+                compare_text = "많음" if we_val > wk_val else "적음"
+                if wk_val == we_val: compare_text = "비슷함"
+                lines.append(f"* **평일/주말 유동인구:** 주말 {fmt(we_val,0)}명/일, 평일 {fmt(wk_val,0)}명/일 (주말이 평일보다 {compare_text})")
+            except Exception as e:
+                lines.append(f"* **평일/주말 데이터:** (파싱 오류: {e})")
 
-            # 시간대
-            timeband = normalize_columns(timeband)
             try:
-                row = pick_population_row(timeband)
-                tb_cols = [c for c in row.index if ("시" in c or "~" in c)]
-                s = row[tb_cols].astype(float).sort_values(ascending=False)[:3]
-                lines.append("\n## TIMEBAND\n시간대 TOP3 → " + " / ".join([f"{k}: {fmt(v,0)}명" for k,v in s.items()]))
-            except Exception:
-                lines.append("\n## TIMEBAND\n정보 없음")
+                tb_data = get_long_data_dict(timeband_df, ['시간대'], ['인구(명)'])
+                s = pd.Series(tb_data).astype(float).sort_values(ascending=False)[:3]
+                time_lines = [f"{format_time_idx_to_korean(idx)}({fmt(val,0)}명)" for idx, val in s.items()]
+                lines.append(f"* **주요 유동 시간대:** {', '.join(time_lines)}")
+            except Exception as e:
+                lines.append(f"* **시간대 데이터:** (파싱 오류: {e})")
 
             return "\n".join(lines)
 
@@ -1222,38 +1162,126 @@ def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, 
         if shop_row.empty:
             return f"🚨 분석 불가: '{store_id}' 가맹점의 데이터를 찾을 수 없습니다."
 
-        # 프롬프트 구성
+        # --- SYSTEM_PROMPT 및 build_prompt 함수 수정 ---
+        
+        # 프롬프트 수정 (주말 특성 분석 방식을 '평일 vs 주말'로 변경)
         SYSTEM_PROMPT = """
-너는 동네 상권 마케팅 전략가다.
-답변은 다음 우선순위를 반드시 지켜라:
-1) 우리 가게는 지하철역(출퇴근 인구 중심) 근처임을 전제로, 시간대별(특히 출퇴근) 유동인구 특징을 가장 먼저 요약
-2) 유동인구 의존도가 높아 신규 방문은 많지만 재방문율이 낮다는 가정 하에, 재방문 고객 유도 전략을 중심으로 제시
-""".strip()
+너는 '{shop_cat}' 업종 전문 상권 분석가이자 마케팅 전략가다.
+너의 임무는 '{shop_station}' 역세권의 [DATA_BLOCK]을 심층 분석하고, 유동인구를 '재방문 단골'로 만들기 위한 창의적이고 구체적인 전략을 제안하는 것이다.
+추상적인 조언은 금지. [DATA_BLOCK]의 숫자를 직접 언급하며 데이터에 기반한 전략만 제시하라.
 
-        QUESTION = (
-            "우리 가게는 지하철역 근처에 있다.\n"
-            "답변은 첫번째로 우리 가게 주변 유동인구 특성을 정리하고, 특히 지하철역 특성상 출퇴근 시간대의 유동인구 변화를 먼저 설명해줘.\n"
-            "그 다음, 유동인구 의존도가 높아서 신규 방문은 많지만 재방문율이 낮은 편이다.\n"
-            "이를 개선하기 위해 재방문 고객 유도 전략만 집중해서 제시해줘."
-        )
+[DATA_BLOCK]
+{data_block}
 
-        def build_prompt(question: str, data_block: str) -> str:
-            return f"SYSTEM:\n{SYSTEM_PROMPT}\n\n[질문]\n{question}\n\n[DATA_BLOCK]\n{data_block}"
+[OUTPUT INSTRUCTION]
+아래 1번, 2번 항목을 반드시 포함하여 리포트를 완성하라.
+
+---
+**1. {shop_station} 인근 유동인구 특성 및 출퇴근 시간대 변화 (심층 분석)**
+([DATA_BLOCK]을 심층적으로 분석하라.)
+
+* **출근 시간 (05시~09시):** 이 시간대 유동인구(약 {morning_pop}명)는 주로 직장인/학생일 것이다. 이들의 특성(예: 빠른 아침 식사, 테이크아웃 커피)을 추론하고, 현재 {shop_cat} 업종과의 연관성을 분석하라.
+* **점심 시간 (09시~14시):** 점심시간대 유동인구(약 {lunch_pop}명)는 {shop_station} 인근 직장인 수요를 의미한다. 이 시간대 인구가 다른 시간대에 비해 어떤 수준인지 **숫자를 들어 비교**하고, {shop_cat} 업종에 어떤 기회가 있는지 분석하라.
+* **퇴근 시간 (18시~23시):** 퇴근 시간대 유동인구(약 {evening_pop}명)는 이 상권의 **핵심 잠재 고객**이다. 이 인구가 하루 중 가장 많은지(혹은 적은지) **숫자로 비교**하고, 이들이 원하는 것(예: 간단한 식사, 동료와의 한잔)이 무엇일지 {shop_cat} 업종과 연결하여 추론하라.
+* **주말 특성 (평일 vs 주말):** 주말 유동인구(약 {weekend_pop}명)가 평일(약 {weekday_pop}명) 대비 어떤지 **숫자로 비교**하라. 이 데이터는 {shop_station} 상권이 '오피스 상권'인지 '주말 나들이 상권'인지 판단할 핵심 근거다. 이것이 {shop_cat} 업종의 주말 운영에 어떤 의미를 주는지 분석하라.
+
+---
+**2. 재방문 고객 유도를 위한 집중 전략 (데이터 기반 제안)**
+(신규 유동인구를 단골로 전환하는 것이 핵심 목표다. 위 1번 분석과 [DATA_BLOCK]을 근거로, **창의적이고 구체적인 전략 3-4가지**를 제안하라. '이상적인 이미지'의 예시처럼 상세하게 작성하되, **절대 하드코딩하지 말고 데이터에 맞춰 생성**하라.)
+
+**[전략 예시 1: {morning_pop}명의 출근 고객 타겟 전략]** (←데이터에 근거하여 AI가 직접 소제목 생성)
+* **아이디어:** (예: '딤섬 미식 여권' 같은 스탬프/포인트 시스템 도입)
+* **구체적 실행 방안:** (예: 5회 방문 시 메뉴 1개 무료, 10회 방문 시 식사권 1만원 할인 등...)
+* **데이터 근거:** (예: {shop_station} 역세권은 {total_pop}명이라는 유동인구가 있지만 재방문율이 낮다. 따라서 명확한 보상 체계로 재방문 동기를 부여해야 한다...)
+
+**[전략 예시 2: {evening_pop}명의 퇴근 고객 타겟 전략]** (←데이터에 근거하여 AI가 직접 소제목 생성)
+* **아이디어:** (예: '퇴근 후 딤맥 & 맥주' 프로모션)
+* **구체적 실행 방안:** (예: 오후 6시~8시 사이 '딤섬 2종 + 생맥주 2잔' 세트를 2만원에 제공...)
+* **데이터 근거:** (예: 하루 중 가장 많은 {evening_pop}명의 유동인구가 몰리는 퇴근 시간대에, {shop_cat} 업종의 특성을 살린 '퇴근길 즐거움'이라는 경험을 제공하여 재방문을 유도한다...)
+
+**[전략 예시 3: {weekend_pop}명의 주말 고객 타겟 전략]** (←데이터에 근거하여 AI가 직접 소제목 생성)
+* **아이디어:** (예: '주말 가족/연인 세트' 및 SNS 인증 이벤트)
+* **구체적 실행 방안:** (예: 3-4인 가족 세트, 2인 연인 세트 구성. 인스타그램에 특정 해시태그(#뚝섬맛집 #{shop_name}) 인증 시 음료 1개 무료 제공...)
+* **데이터 근거:** (예: 주말 유동인구가 {weekend_pop}명으로 평일({weekday_pop}명)보다 많다는 것은, 주말 나들이/데이트 고객이 많다는 의미다. 이들에게 '메뉴 선택의 고민'을 줄여주고 'SNS 인증'의 즐거움을 제공하여...)
+"""
+
+        # build_prompt 함수: SYSTEM_PROMPT에 동적 데이터를 주입
+        def build_prompt(data_block: str, shop_row, gender_age_df, weekday_weekend_df, timeband_df) -> str:
+            
+            shop_dict = shop_row.iloc[0].to_dict()
+            
+            try:
+                ga_data = get_long_data_dict(gender_age_df, ['구분', '항목'], ['인구(명)'])
+                ga_male = ga_data.get("남성", 0)
+                ga_female = ga_data.get("여성", 0)
+                # '일일' 대신 합계 사용
+                ga_total = ga_male + ga_female
+            except Exception:
+                ga_data = {}
+                ga_male = 0
+                ga_female = 0
+                ga_total = 0
+            
+            try:
+                ww_data = get_long_data_dict(weekday_weekend_df, ['구분', '항목'], ['인구(명)'])
+                # '평일' 또는 '주중' 키를 모두 시도
+                wk_val = float(ww_data.get("평일", ww_data.get("주중", 0)))
+                we_val = float(ww_data.get("주말", 0))
+            except Exception:
+                ww_data = {}
+                wk_val = 0
+                we_val = 0
+            
+            try:
+                tb_data = get_long_data_dict(timeband_df, ['시간대'], ['인구(명)'])
+            except Exception:
+                tb_data = {}
+
+            # 프롬프트 포맷팅에 사용할 딕셔너리 생성
+            format_data = {
+                "data_block": data_block,
+                "shop_cat": shop_dict.get("업종_정규화1", "요식업"),
+                "shop_name": shop_dict.get("MCT_NM", "우리 가게"),
+                # [*** 여기를 수정 ***] '지하철역' 대신 '상권' 컬럼을 프롬프트에 주입
+                "shop_station": shop_dict.get("HPSN_MCT_BZN_CD_NM", "현 상권"),
+                "total_pop": fmt(ga_total, 0), # 합계 total 사용
+                "morning_pop": fmt(tb_data.get("05~09시", 0), 0),
+                "lunch_pop": fmt(tb_data.get("09~12시", 0) + tb_data.get("12~14시", 0), 0),
+                "evening_pop": fmt(tb_data.get("18~23시", 0), 0),
+                "weekday_pop": fmt(wk_val, 0), # 로직이 적용된 wk_val 사용
+                "weekend_pop": fmt(we_val, 0),
+            }
+            
+            return SYSTEM_PROMPT.format(**format_data)
+
+        # --- 함수 메인 로직 수정 (LLM 직접 호출) ---
 
         # 데이터 블록 생성
-        monthly = pd.DataFrame()  # 사용 안함
-        data_block = make_data_block(monthly, df_gender_age, df_weekday_weekend, df_dayofweek, df_timeband, shop_row)
-        prompt = build_prompt(QUESTION, data_block)
+        # [수정] df_dayofweek 제거
+        data_block = make_data_block(df_gender_age, df_weekday_weekend, df_timeband, shop_row)
+        
+        # 프롬프트 빌드 (더 많은 인자 전달)
+        # [수정] df_dayofweek 제거
+        prompt = build_prompt(data_block, shop_row, df_gender_age, df_weekday_weekend, df_timeband)
+        
+        # LLM 직접 호출
+        llm_response = call_gemini_llm(prompt)
         
         # 최종 통합 리포트 생성
+        # '기본정보' 다시 추가
         final_report = f"""
-======================================================================
 🚇 유동인구 기반 재방문 유도 전략 - '{store_id}' 가맹점 분석 리포트
-======================================================================
+
 
 {basic_info_content}
 
-{prompt}
+---
+## 📊 유동인구 데이터 분석 리포트
+{data_block}
+
+---
+## 🤖 AI 컨설턴트 상세 전략 제안
+{llm_response}
 """
         # 2. 통합된 리포트 하나만 반환
         return final_report
@@ -1275,7 +1303,6 @@ def floating_population_strategy_tool(store_id: str, df_all_join: pd.DataFrame, 
 
 **기술적 세부사항:**
 {error_details}"""
-
 
 @tool
 def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_gender_age: pd.DataFrame, df_weekday_weekend: pd.DataFrame, df_dayofweek: pd.DataFrame, df_timeband: pd.DataFrame) -> str:
@@ -1314,7 +1341,8 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
             shop = shop_row.iloc[0].to_dict() if len(shop_row) else {}
             shop_name = shop.get("MCT_NM", "가게명 미상")
             shop_addr = shop.get("MCT_BSE_AR", "주소 미상")
-            shop_station = shop.get("HPSN_MCT_ZCD_NM", "지하철역 미상")
+            # [*** 여기를 수정 ***] '지하철역' 대신 '상권' 컬럼을 사용하고 변수명은 shop_station을(를) shop_commercial_area로 변경
+            shop_commercial_area = shop.get("HPSN_MCT_BZN_CD_NM", "상권 미상")
             shop_cat = shop.get("업종_정규화1", shop.get("업종_정규화2_대분류", "업종 미상"))
             shop_month = shop.get("TA_YM", "NA")
             
@@ -1337,7 +1365,8 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
                 f"* **가맹점 ID:** {store_id}", # store_id 추가
                 f"* **업종:** {shop_cat} (가게명: {shop_name})",
                 f"* **위치:** {shop_addr}",
-                f"* **인근 지하철역:** {shop_station}",
+                # [*** 여기를 수정 ***] '인근 지하철역' -> '상권'으로 텍스트 변경
+                f"* **상권:** {shop_commercial_area}",
                 f"* **기준월:** {shop_month}",
             ]
             lines.append("\n".join(meta))
@@ -1447,7 +1476,6 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
             tb_row = timeband[timeband["구분"] == "인구"].iloc[0]
             shop_dict = shop_row.iloc[0].to_dict()
 
-            # [*** 여기를 수정 ***]
             # 'top1_pop' 계산 버그 수정
             time_cols = ["05~09시", "09~12시", "12~14시", "14~18시", "18~23시", "23~05시"]
             # tb_row[time_cols]로 숫자 컬럼만 선택 -> astype(float)로 변환 -> 정렬 -> 첫번째 값(iloc[0]) 추출
@@ -1463,7 +1491,8 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
                 "top1_pop": fmt(top1_val, 0), # 수정된 top1_val 사용
                 "lunch_pop": fmt(pd.to_numeric(tb_row.get('09~12시', 0)) + pd.to_numeric(tb_row.get('12~14시', 0)), 0), # 09-14시 인구 합산 및 숫자 변환
                 "shop_cat": shop_dict.get("업종_정규화1", "요식업"),
-                "shop_station": shop_dict.get("HPSN_MCT_ZCD_NM", "현 상권")
+                # [*** 여기를 수정 ***] '지하철역' 대신 '상권' 컬럼을 프롬프트에 주입
+                "shop_station": shop_dict.get("HPSN_MCT_BZN_CD_NM", "현 상권")
             }
             
             # .format()을 사용하여 SYSTEM_PROMPT에 데이터 주입
@@ -1481,9 +1510,7 @@ def lunch_turnover_strategy_tool(store_id: str, df_all_join: pd.DataFrame, df_ge
         
         # 최종 리포트 구성 변경
         final_report = f"""
-======================================================================
-🍽️ 점심시간 회전율 극대화 전략 - '{store_id}' 가맹점 분석 리포트
-======================================================================
+  점심시간 회전율 극대화 전략 - '{store_id}' 가맹점 분석 리포트
 
 {basic_info_content}
 

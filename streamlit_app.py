@@ -197,7 +197,6 @@ class ToolExecutor:
                 "df_all_join": self.df_all_join,
                 "df_gender_age": self.df_gender_age_selected,
                 "df_weekday_weekend": self.df_weekday_weekend_selected,
-                "df_dayofweek": self.df_dayofweek,
                 "df_timeband": self.df_timeband_selected
             })
         except Exception as e:
