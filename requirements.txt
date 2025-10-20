@@ -1,23 +1,18 @@
 # 핵심 의존성
 streamlit>=1.38.0
-google-generativeai>=0.8.0
 pandas>=2.2.0
+numpy
+Pillow>=10.0.0
+requests
+
+# LLM 및 AI 에이전트 관련
+google-generativeai>=0.8.0
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-google-genai>=1.0.0
+langgraph>=0.1.0
 
 # MCP (Model Context Protocol) 관련
 mcp>=1.13.1
 fastmcp>=2.11.0
-
-# LangChain 관련
-langchain>=0.1.0
-langchain-google-genai>=1.0.0
 langchain-mcp-adapters>=0.1.0
-langchain-core>=0.1.0
-langgraph>=0.1.0
-
-# 이미지 처리
-Pillow>=10.0.0
-
-# 기타
-asyncio
-
-requests

@@ -100,10 +100,9 @@ GOOGLE_API_KEY: Google AI Studio에서 발급받은 API 키.<br><br>
 <br><br>
 DATA_ZIP_URL: 보안을 위해 GitHub에 올리지 않은 9개의 .csv 파일을 압축한 shc_data.zip 파일의 Google Drive 직접 다운로드 링크.
 <br><br><br>
-5. 로컬 서버 실행
+5. 로컬에서 실행
 <br>
-streamlit run streamlit_app.py
-(만약 uv 사용 시: uv run streamlit run streamlit_app.py)
+uv run streamlit run streamlit_app.py
 
 ✨ 라이선스 (License)
 본 프로젝트는 MIT License를 따릅니다.
