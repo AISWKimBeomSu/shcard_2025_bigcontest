@@ -185,7 +185,7 @@ with st.container():
     st.markdown('<p class="subtitle">✨복잡한 마케팅 고민, 이제 AI 파트너에게 맡겨주세요.✨</p>', unsafe_allow_html=True)
     
     # 메인 이미지
-    st.image(load_image("AI_Marketing_Counselor.png"), width='stretch', caption="✨사장님의 비즈니스 고민, 솔비가 데이터로 해결해 드릴게요.")
+    st.image(load_image("AI_Marketing_Counselor.png"), width='stretch', caption="✨사장님의 비즈니스 고민, 솔비가 해결해 드릴게요.")
     
     # 구분선
     st.divider()
