@@ -19,3 +19,5 @@ Pillow>=10.0.0
 
 # 기타
 asyncio
+
+requests

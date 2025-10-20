@@ -10,6 +10,11 @@ from langchain_core.tools import tool
 from PIL import Image
 from pathlib import Path
 
+# --- zip 파일 처리를 위한 라이브러리 추가 ---
+import requests
+import zipfile
+import io
+
 # 새로 만든 분석 도구들 import
 from tools import cafe_marketing_tool, revisit_rate_analysis_tool, store_strength_weakness_tool, floating_population_strategy_tool, lunch_turnover_strategy_tool, get_score_from_raw
 
@@ -56,15 +61,55 @@ system_prompt = """당신은 사용자의 요청을 분석하여 최적의 솔�
 greeting = "안녕하세요! 사장님의 든든한 AI 성장 파트너, 솔비(SOL-B)입니다. 질문과 함께 가게 ID를 알려주세요."
 
 # 데이터 로딩 함수
+# ---  데이터 로딩 함수 전체 변경 (기존 data폴더 -> google drive에서 불러오기)
 @st.cache_data 
 def load_data():
-    """5개의 핵심 데이터셋을 로드하고 전처리하는 함수"""
+    """9개의 핵심 데이터셋을 GDrive의 Zip 파일에서 로드하고 전처리하는 함수"""
     try:
-        # 데이터 파일 경로
-        data_path = Path("data")
+        # 1. Streamlit Secrets에서 Zip 파일 URL 불러오기
+        zip_url = st.secrets["DATA_ZIP_URL"]
         
-        # 1. 전체 JOIN 데이터 로드 및 전처리
-        df_all_join = pd.read_csv(data_path / "전체JOIN_업종정규화_v2.csv", encoding='utf-8-sig')
+        # 2. URL에서 Zip 파일 다운로드
+        r = requests.get(zip_url)
+        r.raise_for_status() # 오류 발생 시 중단
+        
+        # 3. 메모리에서 Zip 파일 열기
+        z = zipfile.ZipFile(io.BytesIO(r.content))
+        
+        # 4. Zip 파일 내부의 개별 CSV 파일을 Pandas로 읽기
+        # (압축할 때 data 폴더 없이 CSV 파일 10개만 압축했다고 가정)
+        
+        with z.open("data_main.csv") as f:
+            df_all_join = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_prompt.csv") as f:
+            df_prompt_dna = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_pop_gender.csv") as f:
+            df_gender_age = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_pop_gender_sel.csv") as f:
+            df_gender_age_selected = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_pop_day.csv") as f:
+            # df_weekday_weekend와 df_dayofweek가 동일한 파일을 사용
+            df_weekday_weekend = pd.read_csv(f, encoding='utf-8-sig')
+            f.seek(0) # 파일 포인터를 처음으로 다시 돌림
+            df_dayofweek = pd.read_csv(f, encoding='utf-8-sig')
+            
+        with z.open("data_pop_day_sel.csv") as f:
+            df_weekday_weekend_selected = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_pop_time.csv") as f:
+            df_timeband = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_pop_time_sel.csv") as f:
+            df_timeband_selected = pd.read_csv(f, encoding='utf-8-sig')
+        
+        with z.open("data_pop_work.csv") as f:
+            df_workplace_population = pd.read_csv(f, encoding='utf-8-sig')
+            
+        # 전처리 코드    
         df_all_join.replace(-999999.9, np.nan, inplace=True)
         
         # 숫자형 컬럼 변환
@@ -82,22 +127,26 @@ def load_data():
         # 필수 컬럼이 있는 행만 유지
         df_all_join.dropna(subset=['ENCODED_MCT', '업종_정규화2_대분류'], inplace=True)
         
-        # 2. AI상담사 핵심전략 프롬프트 데이터 로드
-        df_prompt_dna = pd.read_csv(data_path / "AI상담사_핵심전략_프롬프트.csv", encoding='utf-8-sig')
-        
-        # 3. 특화 질문용 유동인구 데이터 로드 (7개 파일)
-        df_gender_age = pd.read_csv(data_path / "성별연령대별_유동인구.csv", encoding='utf-8-sig')
-        df_gender_age_selected = pd.read_csv(data_path / "성별연령대별_유동인구_선택영역.csv", encoding='utf-8-sig')
-        df_weekday_weekend = pd.read_csv(data_path / "요일별_유동인구.csv", encoding='utf-8-sig')
-        df_weekday_weekend_selected = pd.read_csv(data_path / "요일별_유동인구_선택영역.csv", encoding='utf-8-sig')
-        df_dayofweek = pd.read_csv(data_path / "요일별_유동인구.csv", encoding='utf-8-sig')
-        df_timeband = pd.read_csv(data_path / "시간대별_유동인구.csv", encoding='utf-8-sig')
-        df_timeband_selected = pd.read_csv(data_path / "시간대별_유동인구_선택영역.csv", encoding='utf-8-sig')
-        df_workplace_population = pd.read_csv(data_path / "성별연령대별_직장인구.csv", encoding='utf-8-sig')
+        # --- (수정됨) 아래의 중복 코드를 모두 삭제 ---
+        # 2. AI상담사 핵심전략 프롬프트 데이터 로드 (-> 삭제됨)
+        # 3. 특화 질문용 유동인구 데이터 로드 (7개 파일) (-> 삭제됨)
+        # ---
         
         return df_all_join, df_prompt_dna, df_gender_age, df_gender_age_selected, df_weekday_weekend, df_weekday_weekend_selected, df_dayofweek, df_timeband, df_timeband_selected, df_workplace_population
         
     except Exception as e:
+        # --- (디버깅 코드) ---
+        # 오류 발생 시, 다운로드한 zip 파일의 실제 내용물을 출력
+        try:
+            zip_url = st.secrets["DATA_ZIP_URL"]
+            r = requests.get(zip_url)
+            r.raise_for_status()
+            z = zipfile.ZipFile(io.BytesIO(r.content))
+            st.error(f"⚠️ ZIP 파일 로딩은 성공했으나 내용물 오류. ZIP 파일 내부의 실제 파일 목록: {z.namelist()}")
+        except Exception as ze:
+            st.error(f"❌ ZIP 파일 자체를 로드/분석하는 데 실패했습니다: {ze}")
+        # --- (디버깅 끝) ---
+        
         st.error(f"데이터 로딩 중 오류가 발생했습니다: {e}")
         return None, None, None, None, None, None, None, None, None, None
 
@@ -282,7 +331,7 @@ if df_all_join is not None:
             st.write(query)
 
         with st.chat_message("assistant", avatar="🤖"):
-            with st.spinner("AI 비밀상담사가 분석 중입니다..."):
+            with st.spinner("AI 성장 파트너, 솔비(SOL-B)가 분석 중입니다..."):
                 try:
                     response = agent.invoke({"messages": st.session_state.messages})
                     reply = response["messages"][-1].content
