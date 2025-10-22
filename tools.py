@@ -161,7 +161,7 @@ PERSONA_MAP = {
 }
 
 @tool
-def cafe_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna: pd.DataFrame) -> str:
+def customer_based_marketing_tool(store_id: str, df_all_join: pd.DataFrame, df_prompt_dna: pd.DataFrame) -> str:
     """
     카페 업종 가맹점의 주요 방문 고객 특성을 데이터 기반으로 분석하고, 
     가장 효과적인 마케팅 채널과 구체적인 홍보 문구를 추천하는 전문 도구.

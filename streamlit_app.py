@@ -16,7 +16,7 @@ import zipfile
 import io
 
 # 새로 만든 분석 도구들 import
-from tools import cafe_marketing_tool, revisit_rate_analysis_tool, store_strength_weakness_tool, floating_population_strategy_tool, lunch_turnover_strategy_tool, get_score_from_raw
+from tools import customer_based_marketing_tool, revisit_rate_analysis_tool, store_strength_weakness_tool, floating_population_strategy_tool, lunch_turnover_strategy_tool, get_score_from_raw
 
 # 환경변수
 ASSETS = Path("assets")
@@ -31,7 +31,7 @@ system_prompt = """당신은 사용자의 요청을 분석하여 최적의 솔�
 사용자 질문의 핵심 의도를 파악하고, 아래 가이드에 따라 가장 적합한 도구를 하나만 선택하여 실행하세요.
 
 - **카페 고객 분석**: 질문에 **'카페'** 업종이 명시되고, **'고객 특성', '마케팅 채널', '홍보 방안'** 중 하나라도 언급되면
-  -> `cafe_marketing_tool` 사용
+  -> `customer_based_marketing_tool` 사용
 
 - **재방문율 개선**: 질문에 **'재방문율', '단골 고객', '재방문'** 키워드가 있고, 30% 이하 개선 목적이면
   -> `revisit_rate_analysis_tool` 사용
@@ -206,10 +206,10 @@ class ToolExecutor:
         self.df_workplace_population = df_workplace_population
 
 
-    def cafe_marketing_tool(self, store_id: str) -> str:
+    def customer_based_marketing_tool(self, store_id: str) -> str:
         """'카페' 가맹점의 고객 특성 분석 및 마케팅/홍보 전략을 제안할 때 사용합니다."""
         try:
-            return cafe_marketing_tool.invoke({
+            return customer_based_marketing_tool.invoke({
                 "store_id": store_id, 
                 "df_all_join": self.df_all_join, 
                 "df_prompt_dna": self.df_prompt_dna
@@ -269,9 +269,9 @@ class ToolExecutor:
         from langchain_core.tools import tool
         
         @tool
-        def cafe_marketing_wrapper(store_id: str) -> str:
+        def customer_marketing_wrapper(store_id: str) -> str:
             """'카페' 가맹점의 고객 특성 분석 및 마케팅/홍보 전략을 제안할 때 사용합니다."""
-            return self.cafe_marketing_tool(store_id)
+            return self.customer_based_marketing_tool(store_id)
         
         @tool
         def revisit_rate_analysis_wrapper(store_id: str) -> str:
@@ -294,7 +294,7 @@ class ToolExecutor:
             return self.lunch_turnover_strategy_tool(store_id)
         
         return [
-            cafe_marketing_wrapper,
+            customer_marketing_wrapper,
             revisit_rate_analysis_wrapper,
             store_strength_weakness_wrapper,
             floating_population_strategy_wrapper,
