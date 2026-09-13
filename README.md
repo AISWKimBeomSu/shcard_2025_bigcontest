@@ -142,4 +142,4 @@ streamlit run streamlit_app.py
 
 - **2025 신한카드 빅콘테스트** AI데이터 활용분야 출품작 (Team Momentum)
 - 데이터 파이프라인 설계 · LangGraph 에이전트/분석 도구 개발 · Streamlit 배포
-- License: **MIT**
+- License: **Apache-2.0**
